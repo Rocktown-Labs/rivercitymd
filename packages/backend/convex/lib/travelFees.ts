@@ -171,6 +171,31 @@ export function calculateHaversineDistance(
   return R * c;
 }
 
+export function roundMiles(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+export function milesFromDistance(distance: any): number {
+  if (!distance) return 0;
+  if (typeof distance.text === "string") {
+    const text = distance.text.toLowerCase();
+    const numeric = Number.parseFloat(text.replace(/[^0-9.]/g, ""));
+    if (Number.isFinite(numeric)) {
+      if (text.includes("mi")) return numeric;
+      if (text.includes("ft")) return numeric / 5280;
+      if (text.includes("km")) return numeric / 1.60934;
+      if (text.includes("m")) return numeric / 1609.34;
+    }
+  }
+
+  if (typeof distance.value === "number" && Number.isFinite(distance.value)) {
+    // In Radar API, when units=imperial, distance.value is in feet (5280 ft/mi).
+    return distance.value / 5280;
+  }
+
+  return 0;
+}
+
 export function calculateTravelFeeForMiles(
   distanceMiles: number,
   settingsInput: Partial<TravelFeeSettings> = defaultTravelFeeSettings,

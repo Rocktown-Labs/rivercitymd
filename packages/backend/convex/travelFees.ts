@@ -5,6 +5,8 @@ import {
   calculateTravelBufferMinutesForMiles,
   calculateTravelFeeForMiles,
   calculateHaversineDistance,
+  milesFromDistance,
+  roundMiles,
   type TravelFeeSettings,
 } from "./lib/travelFees";
 import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
@@ -18,10 +20,6 @@ const addressValidator = v.object({
   latitude: v.optional(v.number()),
   longitude: v.optional(v.number()),
 });
-
-function roundMiles(value: number) {
-  return Math.round(value * 10) / 10;
-}
 
 async function geocodeAddress(address: string, radarSecretKey: string) {
   const response = await fetch(
@@ -48,6 +46,47 @@ async function geocodeAddress(address: string, radarSecretKey: string) {
     latitude: result.latitude as number,
     longitude: result.longitude as number,
   };
+}
+
+async function calculateDrivingDistanceMiles(
+  originLat: number,
+  originLng: number,
+  destLat: number,
+  destLng: number,
+  radarSecretKey?: string,
+): Promise<number> {
+  if (
+    Math.abs(originLat - destLat) < 0.0001 &&
+    Math.abs(originLng - destLng) < 0.0001
+  ) {
+    return 0;
+  }
+
+  if (radarSecretKey) {
+    try {
+      const response = await fetch(
+        `https://api.radar.io/v1/route/distance?origin=${originLat},${originLng}&destination=${destLat},${destLng}&modes=car&units=imperial`,
+        {
+          method: "GET",
+          headers: { Authorization: radarSecretKey },
+        },
+      );
+      if (response.ok) {
+        const payload: any = await response.json();
+        const carRoute = payload.routes?.car;
+        const miles = milesFromDistance(carRoute?.distance);
+        if (miles > 0) {
+          return roundMiles(miles);
+        }
+      }
+    } catch {
+      // Fall back to Haversine if Radar route distance is unavailable
+    }
+  }
+
+  return roundMiles(
+    calculateHaversineDistance(originLat, originLng, destLat, destLng),
+  );
 }
 
 export const autocomplete = action({
@@ -128,11 +167,12 @@ export const calculate = action({
       message: "Please wait a moment before recalculating this address.",
     });
 
+    const radarSecretKey = process.env.RADAR_SECRET_KEY;
+
     let lat = args.address.latitude;
     let lng = args.address.longitude;
 
     if (lat === undefined || lng === undefined) {
-      const radarSecretKey = process.env.RADAR_SECRET_KEY;
       if (!radarSecretKey) {
         throw new ConvexError({
           code: "MISSING_RADAR_SECRET_KEY",
@@ -158,13 +198,12 @@ export const calculate = action({
       internal.travelFeeSettings.getInternal,
       {},
     );
-    const distanceMiles = roundMiles(
-      calculateHaversineDistance(
-        settings.originLatitude,
-        settings.originLongitude,
-        lat,
-        lng,
-      ),
+    const distanceMiles = await calculateDrivingDistanceMiles(
+      settings.originLatitude,
+      settings.originLongitude,
+      lat,
+      lng,
+      radarSecretKey,
     );
 
     return {
