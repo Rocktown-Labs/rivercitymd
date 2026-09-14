@@ -2,84 +2,87 @@
 
 import {
   Check,
-  Sparkles,
-  Droplets,
-  Car,
-  Zap,
-  Shield,
   Clock,
+  Sparkles,
+  RotateCcw,
+  Armchair,
+  ShieldCheck,
+  Gem,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 
 const services = [
   {
-    icon: Zap,
-    title: "Express Detail",
+    icon: Clock,
+    title: "Maintenance",
     description:
-      "Full exterior wash, interior vacuum, and quick wax for a fast refresh.",
+      "Routine upkeep to preserve that clean, fresh finish between major details.",
     features: [
-      "Exterior wash & dry",
-      "Interior vacuum",
-      "Window cleaning",
-      "Quick wax spray",
-    ],
-  },
-  {
-    icon: Car,
-    title: "Full Detail",
-    description:
-      "Complete interior and exterior deep clean for showroom quality.",
-    features: [
-      "Deep interior cleaning",
-      "Exterior wash & wax",
-      "Engine bay cleaning",
-      "Tire shine",
+      "Light interior vacuum",
+      "Exterior contact wash",
+      "Light touchpoint wipe down",
+      "Tire dressing",
     ],
   },
   {
     icon: Sparkles,
-    title: "Paint Correction",
+    title: "Signature",
     description:
-      "Remove scratches, swirls, and oxidation to restore original gloss.",
+      "Our signature balance of thorough exterior hand washing and focused interior care.",
     features: [
-      "Scratch removal",
-      "Swirl correction",
-      "Paint restoration",
-      "Protective coating",
+      "Door-jamb wipe down",
+      "Light spot treatment",
+      "Full wipe down",
+      "Thorough exterior hand wash",
     ],
   },
   {
-    icon: Droplets,
-    title: "Ceramic Coating",
-    description: "Long-lasting protection with hydrophobic properties.",
+    icon: RotateCcw,
+    title: "Deep Reset",
+    description:
+      "Comprehensive deep clean targeting heavy grime, embedded dirt, and stubborn spots.",
     features: [
-      "UV protection",
-      "Scratch resistance",
-      "Hydrophobic layer",
-      "2-year warranty",
+      "Shampoo & extraction",
+      "Thorough interior vacuum",
+      "Chemical paint decontamination",
+      "Targeted steam clean",
     ],
   },
   {
-    icon: Shield,
-    title: "Interior Detail",
-    description: "Deep clean and protect all interior surfaces.",
+    icon: Armchair,
+    title: "Interior Reset",
+    description:
+      "Complete cabin restoration with multi-surface agitation, extraction, and protection.",
     features: [
-      "Leather conditioning",
-      "Carpet shampooing",
-      "Dashboard treatment",
-      "Odor removal",
+      "Deep brushing & agitation",
+      "Shampoo & extraction",
+      "Leather protectant",
+      "Thorough vacuum",
     ],
   },
   {
-    icon: Clock,
-    title: "Subscription Plans",
-    description: "Regular maintenance with exclusive discounts.",
+    icon: ShieldCheck,
+    title: "Decon + Protect",
+    description:
+      "Chemical paint decontamination coupled with durable high-gloss exterior protection.",
     features: [
-      "Weekly: 25% off",
-      "Bi-weekly: 20% off",
-      "Monthly: 10% off",
-      "Priority booking",
+      "Iron removal",
+      "Remove embedded contaminants",
+      "Enhance gloss",
+      "Protect against elements",
+    ],
+  },
+  {
+    icon: Gem,
+    title: "18 mo Ceramic",
+    description:
+      "Long-lasting ceramic shield delivering intense gloss and durable hydrophobics.",
+    features: [
+      "Extreme water beading & easy cleaning",
+      "Deep gloss, slickness, & clarity",
+      "Repel dirt, grime, bugs & sap",
+      "Less prone to water spotting",
     ],
   },
 ];
@@ -151,10 +154,10 @@ export function ServicesSection() {
                       {service.features.map((feature, i) => (
                         <li
                           key={i}
-                          className="flex items-center gap-1.5 text-xs text-muted-foreground group-hover:text-foreground/80 transition-colors"
+                          className="flex items-start gap-1.5 text-xs text-muted-foreground group-hover:text-foreground/80 transition-colors"
                         >
                           <Check
-                            className="w-3 h-3 text-primary flex-shrink-0"
+                            className="w-3 h-3 text-primary flex-shrink-0 mt-0.5"
                             strokeWidth={2.5}
                           />
                           <span className="leading-tight">{feature}</span>

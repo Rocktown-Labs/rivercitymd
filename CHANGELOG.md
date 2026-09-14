@@ -2,6 +2,10 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v1.2.7] - 2026-09-14
+### Changed
+- **Homepage Services Section**: Updated the "Professional services for every need" section to reflect the latest 6-service offerings layout: Maintenance, Signature, Deep Reset, Interior Reset, Decon + Protect, and 18 mo Ceramic, with updated checkmark features and top-aligned check icons.
+
 ## [v1.2.6] - 2026-09-02
 ### Fixed
 - **Convex Production Deployment**: Run the backend package's Convex production deployment from the monorepo Vercel build before publishing the web app.
