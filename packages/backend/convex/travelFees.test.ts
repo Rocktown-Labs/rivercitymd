@@ -285,7 +285,7 @@ describe("travelFees", () => {
     expect(distance).toBeLessThan(70);
   });
 
-  test("uses passed coordinates before geocoding", async () => {
+  test("uses passed coordinates before geocoding and requests driving distance", async () => {
     const t = convexTest(schema, modules);
     const fetchMock = vi.fn(stripeFetchMock);
     vi.stubGlobal("fetch", fetchMock);
@@ -301,10 +301,85 @@ describe("travelFees", () => {
       },
     });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/geocode/forward"),
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/route/distance"),
+      expect.anything(),
+    );
     expect(result.distanceMiles).toBeGreaterThan(68);
     expect(result.distanceMiles).toBeLessThan(70);
     expect(result.fee).toBe(calculateTravelFeeForMiles(result.distanceMiles));
+  });
+
+  test("calculates driving distance using Radar route distance API", async () => {
+    const t = convexTest(schema, modules);
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/route/distance")) {
+        return Response.json({
+          routes: {
+            car: {
+              distance: { text: "19.5 mi", value: 103074.15 },
+              duration: { text: "24 mins", value: 23.92 },
+            },
+          },
+        });
+      }
+      return Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await t.action(api.travelFees.calculate, {
+      address: {
+        street: "201 Diamond Pointe Dr",
+        city: "Maumelle",
+        state: "AR",
+        zip: "72113",
+        latitude: 34.878834,
+        longitude: -92.424237,
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/route/distance"),
+      expect.anything(),
+    );
+    expect(result.distanceMiles).toBe(19.5);
+    expect(result.fee).toBe(15);
+    expect(result.bufferMinutes).toBe(15);
+  });
+
+  test("falls back to Haversine distance when Radar route distance API fails", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/route/distance")) {
+          return Response.json({ error: "Throttled" }, { status: 429 });
+        }
+        return Response.json({}, { status: 404 });
+      }),
+    );
+
+    const result = await t.action(api.travelFees.calculate, {
+      address: {
+        street: "201 Diamond Pointe Dr",
+        city: "Maumelle",
+        state: "AR",
+        zip: "72113",
+        latitude: 34.878834,
+        longitude: -92.424237,
+      },
+    });
+
+    // Falls back to straight-line Haversine (~10.3 miles), which is within the 14-mile free radius
+    expect(result.distanceMiles).toBe(10.3);
+    expect(result.fee).toBe(0);
+    expect(result.bufferMinutes).toBe(0);
   });
 
   test("falls back to Radar geocoding when coordinates are missing", async () => {

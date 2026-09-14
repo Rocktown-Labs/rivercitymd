@@ -2,6 +2,10 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v1.2.8] - 2026-09-14
+### Changed
+- **Radar Driving Distance for Travel Fees**: Calculate travel fees using actual road driving distance from Radar's Route Distance API (`/v1/route/distance`) instead of straight-line (Haversine) distance, with graceful fallback to Haversine on network or service disruptions.
+
 ## [v1.2.7] - 2026-09-14
 ### Changed
 - **Homepage Services Section**: Updated the "Professional services for every need" section to reflect the latest 6-service offerings layout: Maintenance, Signature, Deep Reset, Interior Reset, Decon + Protect, and 18 mo Ceramic, with updated checkmark features and top-aligned check icons.

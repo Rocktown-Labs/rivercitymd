@@ -88,8 +88,48 @@ export async function stripeFetchMock(
     });
   }
   if (urlString.includes("api.radar.io/v1/route/distance")) {
+    try {
+      const parsedUrl = new URL(urlString);
+      const origin = parsedUrl.searchParams.get("origin");
+      const destination = parsedUrl.searchParams.get("destination");
+      if (origin && destination) {
+        const [lat1, lon1] = origin.split(",").map(Number);
+        const [lat2, lon2] = destination.split(",").map(Number);
+        if (
+          Number.isFinite(lat1) &&
+          Number.isFinite(lon1) &&
+          Number.isFinite(lat2) &&
+          Number.isFinite(lon2)
+        ) {
+          const R = 3958.8;
+          const dLat = ((lat2 - lat1) * Math.PI) / 180;
+          const dLon = ((lon2 - lon1) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos((lat1 * Math.PI) / 180) *
+              Math.cos((lat2 * Math.PI) / 180) *
+              Math.sin(dLon / 2) *
+              Math.sin(dLon / 2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+          const miles = Math.round(R * c * 10) / 10;
+          return createMockResponse({
+            routes: {
+              car: {
+                distance: { text: `${miles} mi`, value: miles * 5280 },
+                duration: {
+                  text: `${Math.round(miles * 1.5)} mins`,
+                  value: Math.round(miles * 1.5),
+                },
+              },
+            },
+          });
+        }
+      }
+    } catch {
+      // Fall through to fallback mock
+    }
     return createMockResponse({
-      routes: { car: { distance: { text: "10 mi", value: 10 } } },
+      routes: { car: { distance: { text: "10 mi", value: 52800 } } },
     });
   }
 
