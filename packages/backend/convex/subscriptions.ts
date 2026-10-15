@@ -46,7 +46,7 @@ function validateStartDate(startDate: string): void {
     throw new Error("Start date must be a valid date");
   }
   const today = new Date();
-  today.setHours(12, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
   if (selectedDate < today) {
     throw new Error("Start date cannot be in the past");
   }
@@ -276,7 +276,15 @@ export const activate = internalMutation({
   },
   handler: async (ctx, args) => {
     const subscription = await ctx.db.get(args.subscriptionId);
-    if (!subscription || subscription.status === "cancelled") return;
+    if (!subscription) return;
+    if (subscription.status === "cancelled") {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.cancelStripeSubscription,
+        { stripeSubscriptionId: args.stripeSubscriptionId },
+      );
+      return;
+    }
     await ctx.db.patch(args.subscriptionId, {
       status: "active",
       stripeSubscriptionId: args.stripeSubscriptionId,
@@ -357,12 +365,22 @@ export const cancel = mutation({
     const sub = await ctx.db.get(args.subscriptionId);
     if (!sub) throw new Error("Subscription not found");
 
-    await ctx.db.patch(args.subscriptionId, { status: "cancelled" });
+    await ctx.db.patch(args.subscriptionId, {
+      status: "cancelled",
+      stripeCheckoutSessionId: undefined,
+    });
 
     if (sub.stripeSubscriptionId) {
       await ctx.scheduler.runAfter(0, internal.subscriptions.cancelStripeSubscription, {
         stripeSubscriptionId: sub.stripeSubscriptionId,
       });
+    }
+    if (sub.stripeCheckoutSessionId) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.expireCheckoutSession,
+        { checkoutSessionId: sub.stripeCheckoutSessionId },
+      );
     }
   },
 });
@@ -376,7 +394,17 @@ export const cancelByCustomer = mutation({
     if (!sub || sub.userId !== userId) throw new Error("Subscription not found");
     if (sub.status === "cancelled") return;
 
-    await ctx.db.patch(args.subscriptionId, { status: "cancelled" });
+    await ctx.db.patch(args.subscriptionId, {
+      status: "cancelled",
+      stripeCheckoutSessionId: undefined,
+    });
+    if (sub.stripeCheckoutSessionId) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.expireCheckoutSession,
+        { checkoutSessionId: sub.stripeCheckoutSessionId },
+      );
+    }
     if (sub.stripeSubscriptionId) {
       await ctx.scheduler.runAfter(
         0,
@@ -407,6 +435,13 @@ export const updateStartDateByCustomer = mutation({
       nextScheduledDate: args.startDate,
       stripeCheckoutSessionId: undefined,
     });
+    if (sub.stripeCheckoutSessionId) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.expireCheckoutSession,
+        { checkoutSessionId: sub.stripeCheckoutSessionId },
+      );
+    }
   },
 });
 
@@ -430,6 +465,8 @@ export const updatePreferences = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const { subscriptionId, ...updates } = args;
+    const existing = await ctx.db.get(subscriptionId);
+    if (!existing) throw new Error("Subscription not found");
 
     const patch: Record<string, any> = {};
     if (updates.preferredDayOfWeek !== undefined)
@@ -446,6 +483,16 @@ export const updatePreferences = mutation({
     if (updates.notes !== undefined)
       patch.notes = updates.notes;
 
+    if (updates.startDate !== undefined && existing.status === "pending_payment") {
+      patch.stripeCheckoutSessionId = undefined;
+      if (existing.stripeCheckoutSessionId) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.subscriptions.expireCheckoutSession,
+          { checkoutSessionId: existing.stripeCheckoutSessionId },
+        );
+      }
+    }
     await ctx.db.patch(subscriptionId, patch);
   },
 });
@@ -474,6 +521,12 @@ export const createCheckoutSession = internalAction({
       subscriptionId: args.subscriptionId,
     });
     if (!sub) throw new Error("Subscription not found");
+    if (sub.status !== "pending_payment") {
+      throw new Error("This subscription is not awaiting payment");
+    }
+    if (sub.stripeSubscriptionId) {
+      throw new Error("This subscription has already been paid");
+    }
 
     const user = await ctx.runQuery(internal.users.getByIdInternal, {
       userId: sub.userId,
@@ -497,6 +550,9 @@ export const createCheckoutSession = internalAction({
       );
       if (existingResponse.ok) {
         const existingSession = await existingResponse.json();
+        if (existingSession.status === "complete") {
+          throw new Error("This subscription checkout has already been completed");
+        }
         if (existingSession.status === "open" && existingSession.url) {
           await ctx.runAction(internal.subscriptions.sendCheckoutLink, {
             subscriptionId: args.subscriptionId,
@@ -509,43 +565,19 @@ export const createCheckoutSession = internalAction({
 
     // Compute total in cents for subscription
     // Use price_data with the computed total rather than individual recurring prices
-    const siteUrl = process.env.CONVEX_SITE_URL || "https://patient-wombat-877.convex.site";
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || siteUrl;
-
-    // Build service description
-    const serviceNames: string[] = [];
-    for (const serviceId of sub.serviceIds) {
-      const service = await ctx.runQuery(internal.services.getServiceById, { serviceId });
-      if (service) serviceNames.push(service.name);
-    }
-    const description = serviceNames.join(", ");
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      "https://rivercitymd.vercel.app";
 
     const body = new URLSearchParams({
-      mode: "subscription",
+      mode: "setup",
       customer: stripeCustomerId,
-      "line_items[0][price_data][currency]": "usd",
-      "line_items[0][price_data][product_data][name]": `${description} (${sub.frequency === "monthly" ? "Monthly" : "Biweekly"})`,
-      "line_items[0][price_data][unit_amount]": Math.round(sub.totalPrice * 100).toString(),
-      "line_items[0][quantity]": "1",
+      "payment_method_types[0]": "card",
       "metadata[subscriptionId]": args.subscriptionId,
       success_url: `${appUrl}/dashboard/subscriptions?success=true`,
       cancel_url: `${appUrl}/dashboard/subscriptions?cancelled=true`,
     });
-
-    const startDate = sub.startDate || sub.nextScheduledDate;
-    if (startDate) {
-      const anchor = Math.floor(new Date(`${startDate}T12:00:00Z`).getTime() / 1000);
-      if (!Number.isNaN(anchor) && anchor > Math.floor(Date.now() / 1000)) {
-        body.set("subscription_data[trial_end]", String(anchor));
-      }
-    }
-
-    if (sub.frequency === "monthly") {
-      body.set("line_items[0][price_data][recurring][interval]", "month");
-    } else {
-      body.set("line_items[0][price_data][recurring][interval]", "week");
-      body.set("line_items[0][price_data][recurring][interval_count]", "2");
-    }
 
     const response = await fetch(
       "https://api.stripe.com/v1/checkout/sessions",
@@ -573,6 +605,8 @@ export const createCheckoutSession = internalAction({
       stripeCheckoutSessionId: session.id,
     });
 
+
+
     // Send checkout link to customer
     await ctx.runAction(internal.subscriptions.sendCheckoutLink, {
       subscriptionId: args.subscriptionId,
@@ -582,6 +616,85 @@ export const createCheckoutSession = internalAction({
   },
 });
 
+export const completeSetup = internalAction({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    setupIntentId: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub || sub.status === "cancelled") return null;
+    if (sub.stripeSubscriptionId) return null;
+
+    const user = await ctx.runQuery(internal.users.getByIdInternal, {
+      userId: sub.userId,
+    });
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!user?.stripeCustomerId || !stripeSecretKey) {
+      throw new Error("Stripe customer or secret key is missing");
+    }
+
+    const setupResponse = await fetch(
+      `https://api.stripe.com/v1/setup_intents/${args.setupIntentId}`,
+      { headers: { Authorization: `Bearer ${stripeSecretKey}` } },
+    );
+    if (!setupResponse.ok) {
+      throw new Error(`Stripe setup intent lookup failed: ${setupResponse.status}`);
+    }
+    const setupIntent = await setupResponse.json();
+    const paymentMethodId = setupIntent.payment_method as string | undefined;
+    if (!paymentMethodId) throw new Error("Stripe did not return a payment method");
+
+    const body = new URLSearchParams({
+      customer: user.stripeCustomerId,
+      "default_payment_method": paymentMethodId,
+      "metadata[subscriptionId]": args.subscriptionId,
+      "items[0][price_data][currency]": "usd",
+      "items[0][price_data][product_data][name]": "River City MD subscription",
+      "items[0][price_data][unit_amount]": Math.round(sub.totalPrice * 100).toString(),
+      "items[0][quantity]": "1",
+      collection_method: "charge_automatically",
+      proration_behavior: "none",
+    });
+    if (sub.frequency === "monthly") {
+      body.set("items[0][price_data][recurring][interval]", "month");
+    } else {
+      body.set("items[0][price_data][recurring][interval]", "week");
+      body.set("items[0][price_data][recurring][interval_count]", "2");
+    }
+    const startDate = sub.startDate || sub.nextScheduledDate;
+    if (startDate) {
+      const anchor = Math.floor(new Date(`${startDate}T12:00:00Z`).getTime() / 1000);
+      if (!Number.isNaN(anchor) && anchor > Math.floor(Date.now() / 1000)) {
+        body.set("billing_cycle_anchor", String(anchor));
+      }
+    }
+
+    const response = await fetch("https://api.stripe.com/v1/subscriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stripeSecretKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+    if (!response.ok) {
+      throw new Error(`Stripe subscription creation failed: ${response.status} ${await response.text()}`);
+    }
+    const stripeSubscription = await response.json();
+    await ctx.runMutation(internal.subscriptions.activate, {
+      subscriptionId: args.subscriptionId,
+      stripeSubscriptionId: stripeSubscription.id,
+    });
+    await ctx.runAction(internal.subscriptions.createNextAppointment, {
+      subscriptionId: args.subscriptionId,
+    });
+    return null;
+  },
+});
 export const startCheckout = action({
   args: { subscriptionId: v.id("subscriptions") },
   returns: v.string(),
@@ -618,9 +731,49 @@ export const resendCheckoutLink = action({
   args: { subscriptionId: v.id("subscriptions") },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub || sub.status !== "pending_payment") {
+      throw new Error("Only pending subscriptions can receive a checkout link");
+    }
     await ctx.runAction(internal.subscriptions.createCheckoutSession, {
       subscriptionId: args.subscriptionId,
     });
+
+  },
+});
+
+export const expireCheckoutSession = internalAction({
+  args: { checkoutSessionId: v.string() },
+  handler: async (_ctx, args) => {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret || !args.checkoutSessionId.trim()) return;
+
+    const response = await fetch(
+      `https://api.stripe.com/v1/checkout/sessions/${args.checkoutSessionId}/expire`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(),
+      },
+    );
+    if (!response.ok) {
+      const body = await response.text();
+      const message = body.toLowerCase();
+      if (
+        !message.includes("already expired") &&
+        !message.includes("already completed") &&
+        !message.includes("cannot expire") &&
+        !message.includes("status of `complete`") &&
+        !message.includes("status in [\"open\"]")
+      ) {
+        throw new Error(`Stripe checkout expiration failed: ${response.status} ${body}`);
+      }
+    }
   },
 });
 
