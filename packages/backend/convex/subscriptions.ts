@@ -40,6 +40,18 @@ function computeFirstDate(
   return now.toISOString().split("T")[0];
 }
 
+function validateStartDate(startDate: string): void {
+  const selectedDate = new Date(`${startDate}T12:00:00`);
+  if (Number.isNaN(selectedDate.getTime())) {
+    throw new Error("Start date must be a valid date");
+  }
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  if (selectedDate < today) {
+    throw new Error("Start date cannot be in the past");
+  }
+}
+
 // --- Queries ---
 
 export const list = query({
@@ -230,15 +242,7 @@ export const create = mutation({
     }
 
     const startDate = args.startDate || computeFirstDate(args.preferredDayOfWeek);
-    const selectedDate = new Date(`${startDate}T12:00:00`);
-    if (Number.isNaN(selectedDate.getTime())) {
-      throw new Error("Start date must be a valid date");
-    }
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    if (selectedDate < today) {
-      throw new Error("Start date cannot be in the past");
-    }
+    validateStartDate(startDate);
 
     const subscriptionId = await ctx.db.insert("subscriptions", {
       userId: args.userId,
@@ -383,6 +387,29 @@ export const cancelByCustomer = mutation({
   },
 });
 
+export const updateStartDateByCustomer = mutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    startDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getUserIdFromIdentity(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const sub = await ctx.db.get(args.subscriptionId);
+    if (!sub || sub.userId !== userId) throw new Error("Subscription not found");
+    if (sub.status !== "pending_payment") {
+      throw new Error("The start date can only be changed before payment");
+    }
+    validateStartDate(args.startDate);
+
+    await ctx.db.patch(args.subscriptionId, {
+      startDate: args.startDate,
+      nextScheduledDate: args.startDate,
+      stripeCheckoutSessionId: undefined,
+    });
+  },
+});
+
 export const updatePreferences = mutation({
   args: {
     subscriptionId: v.id("subscriptions"),
@@ -410,10 +437,7 @@ export const updatePreferences = mutation({
     if (updates.preferredTime !== undefined)
       patch.preferredTime = updates.preferredTime;
     if (updates.startDate !== undefined) {
-      const startDate = new Date(`${updates.startDate}T12:00:00`);
-      if (Number.isNaN(startDate.getTime())) {
-        throw new Error("Start date must be a valid date");
-      }
+      validateStartDate(updates.startDate);
       patch.startDate = updates.startDate;
       patch.nextScheduledDate = updates.startDate;
     }

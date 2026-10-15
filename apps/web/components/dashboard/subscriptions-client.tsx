@@ -70,6 +70,7 @@ export default function SubscriptionsClient() {
   const createPortalSession = useAction(api.subscriptions.createCustomerPortalSession);
   const startCheckout = useAction(api.subscriptions.startCheckout);
   const cancelSubscription = useMutation(api.subscriptions.cancelByCustomer);
+  const updateStartDate = useMutation(api.subscriptions.updateStartDateByCustomer);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleManagePayment = async () => {
@@ -104,6 +105,21 @@ export default function SubscriptionsClient() {
       toast.success("Subscription cancelled");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to cancel subscription");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStartDateChange = async (
+    subscriptionId: Id<"subscriptions">,
+    startDate: string,
+  ) => {
+    setIsLoading(true);
+    try {
+      await updateStartDate({ subscriptionId, startDate });
+      toast.success("Start date updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update start date");
     } finally {
       setIsLoading(false);
     }
@@ -197,6 +213,22 @@ export default function SubscriptionsClient() {
                 <p className="text-sm text-muted-foreground">
                   Starts and bills on <span className="font-medium text-foreground">{sub.startDate}</span>
                 </p>
+              )}
+
+              {sub.status === "pending_payment" && (
+                <label className="block max-w-xs space-y-1 text-sm">
+                  <span className="text-muted-foreground">Choose your service and billing start date</span>
+                  <input
+                    className="h-9 w-full rounded-md border bg-background px-3"
+                    type="date"
+                    value={sub.startDate || ""}
+                    min={new Date().toISOString().slice(0, 10)}
+                    disabled={isLoading}
+                    onChange={(event) =>
+                      void handleStartDateChange(sub._id, event.target.value)
+                    }
+                  />
+                </label>
               )}
 
               <div className="flex flex-wrap gap-2 pt-2">
