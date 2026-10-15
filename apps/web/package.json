@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "vercel:build": "if [ -n \"$CONVEX_DEPLOY_KEY\" ]; then cd ../../packages/backend && pnpm exec convex deploy --cmd 'pnpm --filter web build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL; else pnpm build; fi",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
