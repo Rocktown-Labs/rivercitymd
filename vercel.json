@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "cd packages/backend && pnpm exec convex deploy --cmd 'pnpm --filter web build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL",
+  "buildCommand": "if [ -d packages/backend ]; then cd packages/backend; else cd ../.. && cd packages/backend; fi && pnpm exec convex deploy --cmd 'pnpm --filter web build' --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL",
   "outputDirectory": "apps/web/.next"
 }

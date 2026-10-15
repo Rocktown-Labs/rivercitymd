@@ -8,6 +8,8 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ### Fixed
 - **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
+- **Vercel Monorepo Build**: Resolve the backend path from either the repository root or the web project root so both Vercel projects can run the Convex deployment build.
+- **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
 
 ## [v1.2.8] - 2026-09-14
 ### Changed
