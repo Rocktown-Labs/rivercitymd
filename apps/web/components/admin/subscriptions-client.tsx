@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DataTable } from "@/components/ui/data-table";
 import { toast } from "sonner";
+import { AddCustomerForm } from "@/components/forms/admin/add-customer-form";
 import {
   AlertCircle,
   DollarSign,
@@ -79,6 +80,7 @@ type SubscriptionRecord = {
   totalPrice: number;
   status: "pending_payment" | "active" | "paused" | "past_due" | "cancelled";
   nextScheduledDate?: string;
+  startDate?: string;
   notes?: string;
   userName: string;
   userEmail?: string;
@@ -444,6 +446,9 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
   const [frequency, setFrequency] = useState<"biweekly" | "monthly">("monthly");
   const [preferredDay, setPreferredDay] = useState("1"); // Monday
+  const [startDate, setStartDate] = useState(
+    () => new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+  );
   const [preferredTime, setPreferredTime] = useState("09:00");
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
@@ -451,6 +456,7 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
   const [zip, setZip] = useState("");
   const [notes, setNotes] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showAddCustomer, setShowAddCustomer] = useState(false);
 
   // Get vehicles for selected customer
   const customerVehicles = useQuery(
@@ -495,6 +501,7 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
         vehicleIds: selectedVehicleIds as Id<"vehicles">[],
         frequency,
         preferredDayOfWeek: parseInt(preferredDay),
+        startDate,
         preferredTime,
         location: { street, city, state, zip },
         notes: notes || undefined,
@@ -516,7 +523,12 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
     <div className="space-y-4">
       {/* Customer */}
       <div className="space-y-2">
-        <Label>Customer</Label>
+        <div className="flex items-center justify-between">
+          <Label>Customer</Label>
+          <Button type="button" variant="link" size="sm" onClick={() => setShowAddCustomer(true)}>
+            Create new customer
+          </Button>
+        </div>
         <Select value={selectedCustomerId} onValueChange={handleCustomerChange}>
           <SelectTrigger>
             <SelectValue placeholder="Select a customer..." />
@@ -529,6 +541,10 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
             ))}
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">
+          New customers receive an account invitation and can add their card from the emailed setup link or their dashboard.
+        </p>
+        <AddCustomerForm open={showAddCustomer} onOpenChange={setShowAddCustomer} />
       </div>
 
       {/* Vehicles */}
@@ -663,6 +679,20 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      {/* Time */}
+      <div className="space-y-2">
+        <Label>Service start and billing date</Label>
+        <Input
+          type="date"
+          value={startDate}
+          min={new Date().toISOString().slice(0, 10)}
+          onChange={(e) => setStartDate(e.target.value)}
+        />
+        <p className="text-xs text-muted-foreground">
+          The customer&apos;s first service and recurring billing anchor date.
+        </p>
       </div>
 
       {/* Time */}

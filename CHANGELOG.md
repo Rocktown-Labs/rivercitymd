@@ -2,6 +2,17 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [Unreleased]
+### Added
+- **Subscription Payment Lifecycle**: Added start-date billing anchors, reusable customer checkout, customer pay/decline/cancel actions, and an inline admin flow for creating a new customer before issuing a subscription.
+
+### Fixed
+- **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
+- **Vercel Monorepo Build**: Resolve the backend path from either the repository root or the web project root so both Vercel projects can run the Convex deployment build.
+- **Vercel Project Compatibility**: Run the Convex deployment only in projects with `CONVEX_DEPLOY_KEY`; build the separate web project against its configured Convex URL.
+- **Vercel Build Configuration**: Move the conditional deployment logic into the web package script to stay within Vercel's `buildCommand` length limit.
+- **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
+
 ## [v1.2.8] - 2026-09-14
 ### Changed
 - **Radar Driving Distance for Travel Fees**: Calculate travel fees using actual road driving distance from Radar's Route Distance API (`/v1/route/distance`) instead of straight-line (Haversine) distance, with graceful fallback to Haversine on network or service disruptions.

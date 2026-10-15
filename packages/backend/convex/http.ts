@@ -209,20 +209,23 @@ registerRoutes(http, components.stripe, {
       const session = event.data.object;
 
       // --- Handle subscription checkout ---
+      if (session.mode === "setup" && session.metadata?.subscriptionId) {
+        const subscriptionId = session.metadata.subscriptionId as Id<"subscriptions">;
+        const setupIntentId = session.setup_intent as string;
+        await ctx.runAction(internal.subscriptions.completeSetup, {
+          subscriptionId,
+          setupIntentId,
+        });
+        return;
+      }
+
       if (session.mode === "subscription" && session.metadata?.subscriptionId) {
         const subscriptionId = session.metadata.subscriptionId as Id<"subscriptions">;
         const stripeSubscriptionId = session.subscription as string;
-        console.log(
-          `[stripe-webhook] eventId=${event.id} eventType=${event.type} action=subscription_checkout_completed subscriptionId=${subscriptionId} stripeSubscriptionId=${stripeSubscriptionId}`,
-        );
-
-        // Activate the subscription
         await ctx.runMutation(internal.subscriptions.activate, {
           subscriptionId,
           stripeSubscriptionId,
         });
-
-        // Create the first appointment
         await ctx.scheduler.runAfter(0, internal.subscriptions.createNextAppointment, {
           subscriptionId,
         });
