@@ -599,6 +599,7 @@ const schema = defineSchema({
       notes: v.optional(v.string()),
     }),
     totalPrice: v.number(),
+    startDate: v.optional(v.string()),
     status: v.union(
       v.literal("pending_payment"),
       v.literal("active"),

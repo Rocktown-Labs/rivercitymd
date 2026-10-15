@@ -16,28 +16,14 @@ import { getEffectiveServicePrice, type VehicleSize } from "./lib/pricing";
 
 function computeNextDate(
   frequency: "biweekly" | "monthly",
-  preferredDayOfWeek: number,
   fromDate?: string,
 ): string {
-  const from = fromDate ? new Date(fromDate + "T12:00:00") : new Date();
-
-  // Advance by the frequency interval
+  const from = fromDate ? new Date(`${fromDate}T12:00:00`) : new Date();
   if (frequency === "monthly") {
     from.setMonth(from.getMonth() + 1);
   } else {
     from.setDate(from.getDate() + 14);
   }
-
-  // Find the next occurrence of preferredDayOfWeek (0=Sun, 6=Sat)
-  const currentDay = from.getDay();
-  let daysToAdd = preferredDayOfWeek - currentDay;
-  if (daysToAdd < 0) daysToAdd += 7;
-  if (daysToAdd === 0) {
-    // Already on the preferred day — use it
-  } else {
-    from.setDate(from.getDate() + daysToAdd);
-  }
-
   return from.toISOString().split("T")[0];
 }
 
@@ -200,6 +186,7 @@ export const create = mutation({
     vehicleIds: v.array(v.id("vehicles")),
     frequency: v.union(v.literal("biweekly"), v.literal("monthly")),
     preferredDayOfWeek: v.number(),
+    startDate: v.optional(v.string()),
     preferredTime: v.string(),
     location: v.object({
       street: v.string(),
@@ -242,7 +229,16 @@ export const create = mutation({
       }
     }
 
-    const nextScheduledDate = computeFirstDate(args.preferredDayOfWeek);
+    const startDate = args.startDate || computeFirstDate(args.preferredDayOfWeek);
+    const selectedDate = new Date(`${startDate}T12:00:00`);
+    if (Number.isNaN(selectedDate.getTime())) {
+      throw new Error("Start date must be a valid date");
+    }
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    if (selectedDate < today) {
+      throw new Error("Start date cannot be in the past");
+    }
 
     const subscriptionId = await ctx.db.insert("subscriptions", {
       userId: args.userId,
@@ -253,8 +249,9 @@ export const create = mutation({
       preferredTime: args.preferredTime,
       location: args.location,
       totalPrice,
+      startDate,
       status: "pending_payment",
-      nextScheduledDate,
+      nextScheduledDate: startDate,
       notes: args.notes,
       createdBy: adminId,
     });
@@ -274,9 +271,23 @@ export const activate = internalMutation({
     stripeSubscriptionId: v.string(),
   },
   handler: async (ctx, args) => {
+    const subscription = await ctx.db.get(args.subscriptionId);
+    if (!subscription || subscription.status === "cancelled") return;
     await ctx.db.patch(args.subscriptionId, {
       status: "active",
       stripeSubscriptionId: args.stripeSubscriptionId,
+    });
+  },
+});
+
+export const saveCheckoutSession = internalMutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    stripeCheckoutSessionId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.subscriptionId, {
+      stripeCheckoutSessionId: args.stripeCheckoutSessionId,
     });
   },
 });
@@ -352,11 +363,32 @@ export const cancel = mutation({
   },
 });
 
+export const cancelByCustomer = mutation({
+  args: { subscriptionId: v.id("subscriptions") },
+  handler: async (ctx, args) => {
+    const userId = await getUserIdFromIdentity(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const sub = await ctx.db.get(args.subscriptionId);
+    if (!sub || sub.userId !== userId) throw new Error("Subscription not found");
+    if (sub.status === "cancelled") return;
+
+    await ctx.db.patch(args.subscriptionId, { status: "cancelled" });
+    if (sub.stripeSubscriptionId) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.cancelStripeSubscription,
+        { stripeSubscriptionId: sub.stripeSubscriptionId },
+      );
+    }
+  },
+});
+
 export const updatePreferences = mutation({
   args: {
     subscriptionId: v.id("subscriptions"),
     preferredDayOfWeek: v.optional(v.number()),
     preferredTime: v.optional(v.string()),
+    startDate: v.optional(v.string()),
     location: v.optional(
       v.object({
         street: v.string(),
@@ -377,6 +409,14 @@ export const updatePreferences = mutation({
       patch.preferredDayOfWeek = updates.preferredDayOfWeek;
     if (updates.preferredTime !== undefined)
       patch.preferredTime = updates.preferredTime;
+    if (updates.startDate !== undefined) {
+      const startDate = new Date(`${updates.startDate}T12:00:00`);
+      if (Number.isNaN(startDate.getTime())) {
+        throw new Error("Start date must be a valid date");
+      }
+      patch.startDate = updates.startDate;
+      patch.nextScheduledDate = updates.startDate;
+    }
     if (updates.location !== undefined)
       patch.location = updates.location;
     if (updates.notes !== undefined)
@@ -405,7 +445,7 @@ export const updateAfterAppointment = internalMutation({
 
 export const createCheckoutSession = internalAction({
   args: { subscriptionId: v.id("subscriptions") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<string> => {
     const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
       subscriptionId: args.subscriptionId,
     });
@@ -415,10 +455,33 @@ export const createCheckoutSession = internalAction({
       userId: sub.userId,
     });
     if (!user) throw new Error("User not found");
-    if (!user.stripeCustomerId) throw new Error("User has no Stripe customer ID");
+    const stripeCustomerId =
+      user.stripeCustomerId ||
+      (await ctx.runAction(internal.users.ensureStripeCustomer, {
+        userId: sub.userId,
+      }));
 
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) throw new Error("STRIPE_SECRET_KEY not set");
+
+    if (sub.stripeCheckoutSessionId) {
+      const existingResponse = await fetch(
+        `https://api.stripe.com/v1/checkout/sessions/${sub.stripeCheckoutSessionId}`,
+        {
+          headers: { Authorization: `Bearer ${stripeSecretKey}` },
+        },
+      );
+      if (existingResponse.ok) {
+        const existingSession = await existingResponse.json();
+        if (existingSession.status === "open" && existingSession.url) {
+          await ctx.runAction(internal.subscriptions.sendCheckoutLink, {
+            subscriptionId: args.subscriptionId,
+            checkoutUrl: existingSession.url,
+          });
+          return existingSession.url as string;
+        }
+      }
+    }
 
     // Compute total in cents for subscription
     // Use price_data with the computed total rather than individual recurring prices
@@ -435,7 +498,7 @@ export const createCheckoutSession = internalAction({
 
     const body = new URLSearchParams({
       mode: "subscription",
-      customer: user.stripeCustomerId,
+      customer: stripeCustomerId,
       "line_items[0][price_data][currency]": "usd",
       "line_items[0][price_data][product_data][name]": `${description} (${sub.frequency === "monthly" ? "Monthly" : "Biweekly"})`,
       "line_items[0][price_data][unit_amount]": Math.round(sub.totalPrice * 100).toString(),
@@ -444,6 +507,14 @@ export const createCheckoutSession = internalAction({
       success_url: `${appUrl}/dashboard/subscriptions?success=true`,
       cancel_url: `${appUrl}/dashboard/subscriptions?cancelled=true`,
     });
+
+    const startDate = sub.startDate || sub.nextScheduledDate;
+    if (startDate) {
+      const anchor = Math.floor(new Date(`${startDate}T12:00:00Z`).getTime() / 1000);
+      if (!Number.isNaN(anchor) && anchor > Math.floor(Date.now() / 1000)) {
+        body.set("subscription_data[trial_end]", String(anchor));
+      }
+    }
 
     if (sub.frequency === "monthly") {
       body.set("line_items[0][price_data][recurring][interval]", "month");
@@ -470,11 +541,38 @@ export const createCheckoutSession = internalAction({
     }
 
     const session = await response.json();
+    if (!session.id || !session.url) {
+      throw new Error("Stripe did not return a checkout session");
+    }
+    await ctx.runMutation(internal.subscriptions.saveCheckoutSession, {
+      subscriptionId: args.subscriptionId,
+      stripeCheckoutSessionId: session.id,
+    });
 
     // Send checkout link to customer
     await ctx.runAction(internal.subscriptions.sendCheckoutLink, {
       subscriptionId: args.subscriptionId,
       checkoutUrl: session.url,
+    });
+    return session.url as string;
+  },
+});
+
+export const startCheckout = action({
+  args: { subscriptionId: v.id("subscriptions") },
+  returns: v.string(),
+  handler: async (ctx, args): Promise<string> => {
+    const userId = await getUserIdFromIdentity(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub || sub.userId !== userId) throw new Error("Subscription not found");
+    if (sub.status !== "pending_payment") {
+      throw new Error("This subscription no longer needs payment");
+    }
+    return await ctx.runAction(internal.subscriptions.createCheckoutSession, {
+      subscriptionId: args.subscriptionId,
     });
   },
 });
@@ -516,7 +614,10 @@ export const createNextAppointment = internalAction({
     if (!user) return;
 
     // Compute next date
-    const nextDate = sub.nextScheduledDate || computeFirstDate(sub.preferredDayOfWeek);
+    const nextDate =
+      sub.nextScheduledDate ||
+      sub.startDate ||
+      computeFirstDate(sub.preferredDayOfWeek);
 
     // Compute total duration
     let totalDuration = 0;
@@ -582,7 +683,6 @@ export const createNextAppointment = internalAction({
     // Compute the NEXT scheduled date (for the cycle after this one)
     const futureDate = computeNextDate(
       sub.frequency,
-      sub.preferredDayOfWeek,
       nextDate,
     );
 
@@ -770,9 +870,10 @@ export const createCustomerPortalSession = action({
     if (!userId) throw new Error("Not authenticated");
 
     const user = await ctx.runQuery(internal.users.getByIdInternal, { userId });
-    if (!user || !user.stripeCustomerId) {
-      throw new Error("No Stripe customer found");
-    }
+    if (!user) throw new Error("User not found");
+    const stripeCustomerId =
+      user.stripeCustomerId ||
+      (await ctx.runAction(internal.users.ensureStripeCustomer, { userId }));
 
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) throw new Error("STRIPE_SECRET_KEY not set");
@@ -788,7 +889,7 @@ export const createCustomerPortalSession = action({
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
-          customer: user.stripeCustomerId,
+          customer: stripeCustomerId,
           return_url: `${appUrl}/dashboard/subscriptions`,
         }),
       },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useAction } from "convex/react";
+import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ type SubscriptionCard = {
   frequency: "biweekly" | "monthly";
   totalPrice: number;
   nextScheduledDate?: string;
+  startDate?: string;
 };
 
 function statusVariant(status: string) {
@@ -67,6 +68,8 @@ export default function SubscriptionsClient() {
     api.subscriptions.getByUser,
   ) as SubscriptionCard[] | undefined | null;
   const createPortalSession = useAction(api.subscriptions.createCustomerPortalSession);
+  const startCheckout = useAction(api.subscriptions.startCheckout);
+  const cancelSubscription = useMutation(api.subscriptions.cancelByCustomer);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleManagePayment = async () => {
@@ -76,6 +79,31 @@ export default function SubscriptionsClient() {
       window.open(url, "_blank");
     } catch {
       toast.error("Failed to open payment management");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePay = async (subscriptionId: Id<"subscriptions">) => {
+    setIsLoading(true);
+    try {
+      const url = await startCheckout({ subscriptionId });
+      window.location.assign(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to open payment");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCancel = async (subscriptionId: Id<"subscriptions">) => {
+    if (!window.confirm("Cancel this subscription?")) return;
+    setIsLoading(true);
+    try {
+      await cancelSubscription({ subscriptionId });
+      toast.success("Subscription cancelled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to cancel subscription");
     } finally {
       setIsLoading(false);
     }
@@ -162,6 +190,31 @@ export default function SubscriptionsClient() {
                       {sub.nextScheduledDate}
                     </p>
                   </div>
+                )}
+              </div>
+
+              {sub.startDate && (
+                <p className="text-sm text-muted-foreground">
+                  Starts and bills on <span className="font-medium text-foreground">{sub.startDate}</span>
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                {sub.status === "pending_payment" && (
+                  <>
+                    <Button size="sm" onClick={() => handlePay(sub._id)} disabled={isLoading}>
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Add Card &amp; Pay
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
+                      Decline Subscription
+                    </Button>
+                  </>
+                )}
+                {(sub.status === "active" || sub.status === "past_due" || sub.status === "paused") && (
+                  <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
+                    Cancel Subscription
+                  </Button>
                 )}
               </div>
 

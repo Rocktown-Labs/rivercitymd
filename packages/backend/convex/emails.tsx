@@ -70,7 +70,11 @@ function shouldSkipEmails(): boolean {
 }
 
 function siteUrl(): string {
-  return process.env.CONVEX_SITE_URL || "https://patient-wombat-877.convex.site";
+  return (
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://rivercitymd.vercel.app"
+  ).replace(/\/$/, "");
 }
 
 function logoUrl(): string {
@@ -287,7 +291,7 @@ export const sendWelcomeEmail = internalAction({
         userName: user.name || "Valued Customer",
         businessName: businessInfo.business.name,
         dashboardUrl: `${siteUrl()}/dashboard`,
-        logoUrl: logoUrl(),
+        logoUrl: businessInfo.business.logoUrl || logoUrl(),
       }),
     );
 
@@ -1056,6 +1060,7 @@ export const sendSubscriptionCheckoutLink = internalAction({
         serviceName: serviceNames.join(", "),
         frequency: sub.frequency,
         price: sub.totalPrice,
+        startDate: sub.startDate || sub.nextScheduledDate,
         checkoutUrl: args.checkoutUrl,
         logoUrl: logoUrl(),
       }),

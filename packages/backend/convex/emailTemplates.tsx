@@ -1045,6 +1045,7 @@ export function SubscriptionCheckoutLinkEmail({
   serviceName,
   frequency,
   price,
+  startDate,
   checkoutUrl,
   logoUrl,
 }: {
@@ -1053,6 +1054,7 @@ export function SubscriptionCheckoutLinkEmail({
   serviceName: string;
   frequency: string;
   price: number;
+  startDate?: string;
   checkoutUrl: string;
   logoUrl?: string;
 }) {
@@ -1075,6 +1077,7 @@ export function SubscriptionCheckoutLinkEmail({
         <DetailField label="Service" value={serviceName} />
         <DetailField label="Frequency" value={frequency === "monthly" ? "Monthly" : "Every 2 Weeks"} />
         <DetailField label="Price" value={`$${price.toFixed(2)} / ${frequency === "monthly" ? "month" : "2 weeks"}`} />
+        {startDate ? <DetailField label="Service starts" value={startDate} /> : null}
       </Section>
 
       <Section style={{ textAlign: "center", marginBottom: "24px" }}>
@@ -1086,7 +1089,8 @@ export function SubscriptionCheckoutLinkEmail({
       <Hr style={emailStyles.hr} />
       <Text style={{ ...emailStyles.text, fontSize: "13px" }}>
         This link will take you to a secure Stripe checkout page. Your card
-        will be charged automatically each billing cycle.
+        will be saved securely and charged automatically on the selected start
+        date and each billing cycle after that.
       </Text>
     </EmailLayout>
   );

@@ -2,6 +2,13 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [Unreleased]
+### Added
+- **Subscription Payment Lifecycle**: Added start-date billing anchors, reusable customer checkout, customer pay/decline/cancel actions, and an inline admin flow for creating a new customer before issuing a subscription.
+
+### Fixed
+- **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
+
 ## [v1.2.8] - 2026-09-14
 ### Changed
 - **Radar Driving Distance for Travel Fees**: Calculate travel fees using actual road driving distance from Radar's Route Distance API (`/v1/route/distance`) instead of straight-line (Haversine) distance, with graceful fallback to Haversine on network or service disruptions.
