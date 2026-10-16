@@ -303,7 +303,8 @@ const schema = defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_date", ["scheduledDate"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_subscription", ["subscriptionId"]),
 
   appointmentAdjustments: defineTable({
     appointmentId: v.id("appointments"),

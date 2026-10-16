@@ -103,6 +103,25 @@ async function seedAvailability(t: any, dayOfWeek: number) {
   });
 }
 
+async function seedAllWeekAvailability(t: any) {
+  for (let day = 0; day < 7; day++) {
+    await seedAvailability(t, day);
+  }
+}
+
+async function appointmentInvoice(t: any, appointmentId: any) {
+  return await t.run(async (ctx: any) => {
+    const rows = await ctx.db.query("invoices").collect();
+    return rows.find((r: any) => r.appointmentId === appointmentId) ?? null;
+  });
+}
+
+async function getUserDoc(t: any, userId: any) {
+  return await t.run(async (ctx: any) => {
+    return await ctx.db.get(userId);
+  });
+}
+
 async function seedSubscription(
   t: any,
   args: {
@@ -295,12 +314,12 @@ describe("subscriptions", () => {
     expect(dispatch).toBeTruthy();
   });
 
-  test("handleCheckoutCompleted activates the subscription and books the first appointment once", async () => {
+  test("activation books the first appointment and pre-schedules the next cycle", async () => {
     const t = convexTest(schema, modules);
     const userId = await seedUser(t);
     const vehicleId = await seedVehicle(t, userId);
     const serviceId = await seedService(t);
-    await seedAvailability(t, 1); // Monday
+    await seedAllWeekAvailability(t);
     const subId = await seedSubscription(t, {
       userId,
       serviceId,
@@ -321,19 +340,30 @@ describe("subscriptions", () => {
     expect(sub.stripeSubscriptionId).toBe("sub_stripe_1");
 
     let appts = await subscriptionAppointments(t, subId);
-    expect(appts).toHaveLength(1);
+    expect(appts).toHaveLength(2);
+
+    // First cycle: booked confirmed with a paid invoice.
     expect(appts[0].status).toBe("confirmed");
     expect(appts[0].scheduledDate).toBe(MONDAY);
     expect(appts[0].scheduledTime).toBe("09:00");
+    const firstInvoice = await appointmentInvoice(t, appts[0]._id);
+    expect(firstInvoice?.status).toBe("paid");
 
-    // Duplicate webhook delivery must not double-book the first cycle.
+    // Next cycle: pre-scheduled pending with a draft invoice.
+    expect(appts[1].status).toBe("pending");
+    expect(appts[1].scheduledDate).toBe("2027-01-07");
+    expect(appts[1].notes).toContain("confirms on payment");
+    const nextInvoice = await appointmentInvoice(t, appts[1]._id);
+    expect(nextInvoice?.status).toBe("draft");
+
+    // Duplicate webhook delivery must not double-book either cycle.
     await t.action(internal.subscriptions.handleCheckoutCompleted, {
       subscriptionId: subId,
       stripeSubscriptionId: "sub_stripe_1",
       paymentStatus: "paid",
     });
     appts = await subscriptionAppointments(t, subId);
-    expect(appts).toHaveLength(1);
+    expect(appts).toHaveLength(2);
   });
 
   test("handleCheckoutCompleted waits for async payment confirmation", async () => {
@@ -391,9 +421,11 @@ describe("subscriptions", () => {
     });
 
     const appts = await subscriptionAppointments(t, subId);
-    expect(appts).toHaveLength(1);
+    expect(appts).toHaveLength(2);
     expect(appts[0].status).toBe("pending");
     expect(appts[0].notes).toContain("conflicts");
+    // The following cycle is still pre-scheduled.
+    expect(appts[1].status).toBe("pending");
   });
 
   test("renewal booking is idempotent per Stripe invoice", async () => {
@@ -401,7 +433,7 @@ describe("subscriptions", () => {
     const userId = await seedUser(t);
     const vehicleId = await seedVehicle(t, userId);
     const serviceId = await seedService(t);
-    await seedAvailability(t, 2); // Tuesday
+    await seedAllWeekAvailability(t);
     const subId = await seedSubscription(t, {
       userId,
       serviceId,
@@ -430,19 +462,129 @@ describe("subscriptions", () => {
     let appts = await subscriptionAppointments(t, subId);
     expect(appts).toHaveLength(1);
     expect(appts[0].scheduledDate).toBe(TUESDAY);
-    expect(appts[0].status).toBe("confirmed");
+    // No pre-scheduled appointment existed for this cycle, so it is
+    // planned ahead of the following one instead of being confirmed.
+    expect(appts[0].status).toBe("pending");
+    expect(appts[0].notes).toContain("confirms on payment");
+    const cycleInvoice = await appointmentInvoice(t, appts[0]._id);
+    expect(cycleInvoice?.status).toBe("draft");
 
-    // A new cycle's invoice books the following appointment.
+    // A new cycle's invoice confirms the current cycle and pre-schedules
+    // the following one.
     await t.action(internal.subscriptions.handleRenewalInvoicePaid, {
       subscriptionId: subId,
       stripeInvoiceId: "in_renewal_2",
     });
     appts = await subscriptionAppointments(t, subId);
     expect(appts).toHaveLength(2);
+    expect(appts[0].status).toBe("confirmed");
+    expect(appts[1].status).toBe("pending");
     expect(appts[1].scheduledDate).toBe("2027-01-08");
+    const confirmedInvoice = await appointmentInvoice(t, appts[0]._id);
+    expect(confirmedInvoice?.status).toBe("paid");
 
     const sub = await getSubscription(t, subId);
     expect(sub.lastRenewalStripeInvoiceId).toBe("in_renewal_2");
+  });
+
+  test("each renewal confirms the current cycle and pre-schedules the next", async () => {
+    const t = convexTest(schema, modules);
+    const userId = await seedUser(t);
+    const vehicleId = await seedVehicle(t, userId);
+    const serviceId = await seedService(t);
+    await seedAllWeekAvailability(t);
+    const subId = await seedSubscription(t, {
+      userId,
+      serviceId,
+      vehicleId,
+      adminId: userId,
+      startDate: MONDAY,
+      preferredTime: "09:00",
+    });
+
+    await t.action(internal.subscriptions.handleCheckoutCompleted, {
+      subscriptionId: subId,
+      stripeSubscriptionId: "sub_stripe_4",
+      paymentStatus: "paid",
+    });
+
+    let appts = await subscriptionAppointments(t, subId);
+    expect(appts).toHaveLength(2);
+    expect(appts[1].status).toBe("pending");
+
+    let user = await getUserDoc(t, userId);
+    expect(user.timesServiced).toBe(1);
+
+    // First renewal: confirms the pre-scheduled cycle and plans the next.
+    await t.action(internal.subscriptions.handleRenewalInvoicePaid, {
+      subscriptionId: subId,
+      stripeInvoiceId: "in_cycle_2",
+    });
+    appts = await subscriptionAppointments(t, subId);
+    expect(appts).toHaveLength(3);
+    expect(appts[1].status).toBe("confirmed");
+    expect(appts[1].scheduledDate).toBe("2027-01-07");
+    const confirmedInvoice = await appointmentInvoice(t, appts[1]._id);
+    expect(confirmedInvoice?.status).toBe("paid");
+    expect(appts[2].status).toBe("pending");
+    expect(appts[2].scheduledDate).toBe("2027-02-07");
+
+    user = await getUserDoc(t, userId);
+    expect(user.timesServiced).toBe(2);
+
+    // Second renewal: same confirm + pre-schedule cadence.
+    await t.action(internal.subscriptions.handleRenewalInvoicePaid, {
+      subscriptionId: subId,
+      stripeInvoiceId: "in_cycle_3",
+    });
+    appts = await subscriptionAppointments(t, subId);
+    expect(appts).toHaveLength(4);
+    expect(appts[2].status).toBe("confirmed");
+    expect(appts[3].status).toBe("pending");
+    expect(appts[3].scheduledDate).toBe("2027-03-07");
+
+    user = await getUserDoc(t, userId);
+    expect(user.timesServiced).toBe(3);
+  });
+
+  test("cancelling the subscription cancels future scheduled appointments", async () => {
+    const t = convexTest(schema, modules);
+    const userId = await seedUser(t);
+    const vehicleId = await seedVehicle(t, userId);
+    const serviceId = await seedService(t);
+    await seedAllWeekAvailability(t);
+    const subId = await seedSubscription(t, {
+      userId,
+      serviceId,
+      vehicleId,
+      adminId: userId,
+      startDate: MONDAY,
+      preferredTime: "09:00",
+    });
+
+    await t.action(internal.subscriptions.handleCheckoutCompleted, {
+      subscriptionId: subId,
+      stripeSubscriptionId: "sub_stripe_5",
+      paymentStatus: "paid",
+    });
+    let appts = await subscriptionAppointments(t, subId);
+    expect(appts).toHaveLength(2);
+
+    const asCustomer = t.withIdentity({
+      subject: userId,
+      email: "subcustomer@test.com",
+    });
+    await asCustomer.mutation(api.subscriptions.cancelByCustomer, {
+      subscriptionId: subId,
+    });
+
+    const sub = await getSubscription(t, subId);
+    expect(sub.status).toBe("cancelled");
+    appts = await subscriptionAppointments(t, subId);
+    expect(appts).toHaveLength(2);
+    for (const appt of appts) {
+      expect(appt.status).toBe("cancelled");
+    }
   });
 
   test("customers can set their service date and time before payment", async () => {
@@ -467,11 +609,19 @@ describe("subscriptions", () => {
       subscriptionId: subId,
       startDate: TUESDAY,
       preferredTime: "10:00",
+      location: {
+        street: "456 Oak Ave",
+        city: "Little Rock",
+        state: "AR",
+        zip: "72202",
+      },
     });
 
     const sub = await getSubscription(t, subId);
     expect(sub.startDate).toBe(TUESDAY);
     expect(sub.preferredTime).toBe("10:00");
     expect(sub.nextScheduledDate).toBe(TUESDAY);
+    expect(sub.location.street).toBe("456 Oak Ave");
+    expect(sub.location.zip).toBe("72202");
   });
 });

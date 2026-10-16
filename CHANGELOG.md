@@ -6,6 +6,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 ### Added
 - **Subscription Payment Lifecycle**: Added start-date billing anchors, reusable customer checkout, customer pay/decline/cancel actions, and an inline admin flow for creating a new customer before issuing a subscription.
 - **Subscription Pay-at-Checkout**: Charge the first subscription payment immediately on a full payment-style Stripe Checkout (product, amount, business name), bill recurring cycles from the payment date, and let the admin or customer pick the availability-validated service date and time that books the first appointment (conflicts land in the admin booking list as pending for rescheduling).
+- **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
 - **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.

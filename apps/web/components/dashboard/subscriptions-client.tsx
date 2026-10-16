@@ -6,6 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import AddressInput from "@/components/ui/address-input";
+import { TimeSlotPicker } from "@/components/home/time-slot-picker";
 import { toast } from "sonner";
 import {
   Calendar,
@@ -28,6 +31,13 @@ type SubscriptionCard = {
   startDate?: string;
   preferredTime: string;
   estimatedDurationMinutes?: number;
+  location?: {
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+    notes?: string;
+  };
 };
 
 function statusVariant(status: string) {
@@ -65,86 +75,181 @@ function formatCurrency(amount: number) {
   }).format(amount);
 }
 
+type ServiceAddress = {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+};
+
 function PendingPaymentControls({
   sub,
   isLoading,
-  onSlotChange,
+  onPreferencesChange,
   onPay,
   onDecline,
 }: {
   sub: SubscriptionCard;
   isLoading: boolean;
-  onSlotChange: (
+  onPreferencesChange: (
     subscriptionId: Id<"subscriptions">,
-    startDate: string,
-    preferredTime?: string,
+    prefs: {
+      startDate?: string;
+      preferredTime?: string;
+      location?: ServiceAddress;
+    },
   ) => Promise<void>;
   onPay: (subscriptionId: Id<"subscriptions">) => Promise<void>;
   onDecline: (subscriptionId: Id<"subscriptions">) => Promise<void>;
 }) {
   const serviceDate = sub.startDate;
-  const slots = useQuery(
-    api.availability.getAvailableTimeSlots,
-    serviceDate
-      ? {
-          date: serviceDate,
-          serviceDuration: sub.estimatedDurationMinutes || 60,
-        }
-      : "skip",
-  ) as
-    | { time: string; displayTime: string; available: boolean; reason?: string }[]
-    | undefined;
+  const [addressSearchAvailable, setAddressSearchAvailable] = useState(true);
+  const [manualAddress, setManualAddress] = useState<ServiceAddress>(() => ({
+    street: sub.location?.street ?? "",
+    city: sub.location?.city ?? "",
+    state: sub.location?.state ?? "",
+    zip: sub.location?.zip ?? "",
+  }));
+
+  const handleAddressSelect = (address: {
+    addressComponents?: {
+      street?: string;
+      city?: string;
+      locality?: string;
+      state?: string;
+      region?: string;
+      postalCode?: string;
+    };
+  }) => {
+    const components = address.addressComponents;
+    const next: ServiceAddress = {
+      street: components?.street ?? "",
+      city: components?.city ?? components?.locality ?? "",
+      state: components?.state ?? components?.region ?? "",
+      zip: components?.postalCode ?? "",
+    };
+    setManualAddress(next);
+    if (next.street && next.city && next.state && next.zip) {
+      void onPreferencesChange(sub._id, { location: next });
+    }
+  };
 
   return (
-    <div className="space-y-3 rounded-md border p-3">
+    <div className="space-y-4 rounded-md border p-3">
       <p className="text-sm text-muted-foreground">
         You&apos;ll be charged {formatCurrency(sub.totalPrice)} today when you
         pay, then every {sub.frequency === "monthly" ? "month" : "2 weeks"}.
-        Your first service is scheduled for the date and time you pick below.
+        Your recurring service runs on the date and time you pick below —
+        we&apos;ll keep your next visit pre-scheduled and it confirms with each
+        payment.
       </p>
-      <label className="block max-w-xs space-y-1 text-sm">
-        <span className="text-muted-foreground">Service date</span>
-        <input
-          className="h-9 w-full rounded-md border bg-background px-3"
-          type="date"
-          value={serviceDate || ""}
-          min={new Date().toISOString().slice(0, 10)}
-          disabled={isLoading}
-          onChange={(event) =>
-            void onSlotChange(sub._id, event.target.value)
-          }
-        />
-      </label>
-      {serviceDate && (
-        <div className="space-y-2">
-          <span className="text-sm text-muted-foreground">Available times</span>
-          {slots === undefined ? (
-            <p className="text-sm text-muted-foreground">
-              Checking availability…
-            </p>
-          ) : slots.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No open times for this date — try another day.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {slots.map((slot) => (
-                <Button
-                  key={slot.time}
-                  type="button"
-                  size="sm"
-                  variant={sub.preferredTime === slot.time ? "default" : "outline"}
-                  disabled={isLoading || !slot.available}
-                  title={slot.available ? undefined : slot.reason || "Unavailable"}
-                  onClick={() => void onSlotChange(sub._id, serviceDate, slot.time)}
-                >
-                  {slot.displayTime}
-                </Button>
-              ))}
-            </div>
-          )}
+
+      <div className="max-w-xs space-y-4">
+        <label className="block space-y-1 text-sm">
+          <span className="text-muted-foreground">Service date</span>
+          <Input
+            type="date"
+            className="bg-background border-border text-foreground"
+            value={serviceDate || ""}
+            min={new Date().toISOString().slice(0, 10)}
+            disabled={isLoading}
+            onChange={(event) =>
+              void onPreferencesChange(sub._id, {
+                startDate: event.target.value,
+                preferredTime: "",
+              })
+            }
+          />
+        </label>
+        <div className="block space-y-1 text-sm">
+          <span className="text-muted-foreground">Service time</span>
+          <TimeSlotPicker
+            date={serviceDate || ""}
+            selectedTime={sub.preferredTime}
+            onTimeSelect={(time) =>
+              void onPreferencesChange(sub._id, {
+                startDate: serviceDate,
+                preferredTime: time,
+              })
+            }
+            serviceDuration={sub.estimatedDurationMinutes || 60}
+          />
         </div>
-      )}
+      </div>
+
+      <div className="space-y-2">
+        <AddressInput
+          onAddressSelect={handleAddressSelect}
+          onAutocompleteAvailabilityChange={setAddressSearchAvailable}
+          label="Service Address"
+          placeholder="Search for your service address"
+        />
+        <p className="text-sm text-muted-foreground">
+          Current service address:{" "}
+          <span className="font-medium text-foreground">
+            {sub.location
+              ? `${sub.location.street}, ${sub.location.city}, ${sub.location.state} ${sub.location.zip}`
+              : "Not set"}
+          </span>
+        </p>
+        {!addressSearchAvailable && (
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              placeholder="Street"
+              value={manualAddress.street}
+              disabled={isLoading}
+              onChange={(e) =>
+                setManualAddress({ ...manualAddress, street: e.target.value })
+              }
+            />
+            <Input
+              placeholder="City"
+              value={manualAddress.city}
+              disabled={isLoading}
+              onChange={(e) =>
+                setManualAddress({ ...manualAddress, city: e.target.value })
+              }
+            />
+            <Input
+              placeholder="State"
+              value={manualAddress.state}
+              disabled={isLoading}
+              onChange={(e) =>
+                setManualAddress({ ...manualAddress, state: e.target.value })
+              }
+            />
+            <Input
+              placeholder="ZIP"
+              value={manualAddress.zip}
+              disabled={isLoading}
+              onChange={(e) =>
+                setManualAddress({ ...manualAddress, zip: e.target.value })
+              }
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="col-span-2"
+              disabled={
+                isLoading ||
+                !manualAddress.street ||
+                !manualAddress.city ||
+                !manualAddress.state ||
+                !manualAddress.zip
+              }
+              onClick={() =>
+                void onPreferencesChange(sub._id, {
+                  location: manualAddress,
+                })
+              }
+            >
+              Save Address
+            </Button>
+          </div>
+        )}
+      </div>
+
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
@@ -214,19 +319,31 @@ export default function SubscriptionsClient() {
     }
   };
 
-  const handleStartDateChange = async (
+  const handlePreferencesChange = async (
     subscriptionId: Id<"subscriptions">,
-    startDate: string,
-    preferredTime?: string,
+    prefs: {
+      startDate?: string;
+      preferredTime?: string;
+      location?: {
+        street: string;
+        city: string;
+        state: string;
+        zip: string;
+      };
+    },
   ) => {
     setIsLoading(true);
     try {
-      await updateStartDate({ subscriptionId, startDate, preferredTime });
+      await updateStartDate({ subscriptionId, ...prefs });
       toast.success(
-        preferredTime ? "Service time updated" : "Start date updated",
+        prefs.location && !prefs.startDate && !prefs.preferredTime
+          ? "Service address updated"
+          : prefs.preferredTime
+            ? "Service time updated"
+            : "Start date updated",
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update start date");
+      toast.error(error instanceof Error ? error.message : "Failed to update schedule");
     } finally {
       setIsLoading(false);
     }
@@ -326,7 +443,7 @@ export default function SubscriptionsClient() {
                 <PendingPaymentControls
                   sub={sub}
                   isLoading={isLoading}
-                  onSlotChange={handleStartDateChange}
+                  onPreferencesChange={handlePreferencesChange}
                   onPay={handlePay}
                   onDecline={handleCancel}
                 />
