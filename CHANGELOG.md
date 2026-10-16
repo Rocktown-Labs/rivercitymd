@@ -18,6 +18,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription First-Invoice Webhook Race**: Ignore the first subscription invoice (`subscription_create`) in the renewal handler, dedupe completed checkout deliveries, and skip already-booked cycles so the first appointment cannot be double-booked.
 - **Subscription Card Layout**: Compact the dashboard subscription cards into a side-by-side grid with side-by-side date and time pickers and a slim address bar, for both pending-payment and active subscriptions.
 - **Dashboard Multi-Vehicle Booking**: Match the /book experience in the dashboard new-appointment form — multi-vehicle selection, per-vehicle accordion service selection (package → add-ons → recurring plans with selection summaries and auto-advance), per-vehicle pet fees, per-vehicle review breakdown, and per-vehicle service mappings on the booking draft.
+- **Saved Vehicles in Booking Flow**: Signed-in users now see their saved vehicles as one-click chips in the /book flow's vehicle step (fully pre-filled entries, removable), the first vehicle entry auto-fills from their saved data, and the phone number prefills in the personal-info step — no more retyping known information.
 
 ### Changed
 - **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).

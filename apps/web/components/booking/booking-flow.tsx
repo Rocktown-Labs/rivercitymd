@@ -52,6 +52,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Car,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -74,6 +75,19 @@ type BookingAuthState = {
   user: ReturnType<typeof useUser>["user"];
   isLoaded: boolean;
   isSignedIn: boolean;
+};
+
+type SavedVehicleOption = {
+  _id: Id<"vehicles">;
+  year: number;
+  make: string;
+  model: string;
+  color?: string;
+  licensePlate?: string;
+  size?: "small" | "medium" | "large";
+  vehicleTypeId?: Id<"vehicleTypes">;
+  vehicleType?: { name?: string } | null;
+  classification?: VehicleLookupValue["classification"];
 };
 
 interface RadarAddress {
@@ -412,6 +426,9 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
   const saveOutOfAreaRequest = useMutation(api.bookingDrafts.saveOutOfAreaRequest);
   const convex = useConvex();
   const currentUser = useQuery(api.users.getCurrentUser, isSignedIn ? {} : "skip");
+  const myVehicles = useQuery(api.vehicles.getMyVehicles) as
+    | SavedVehicleOption[]
+    | undefined;
 
   const vehiclePricingContexts = useMemo(() => {
     const vehicles = step3Data?.vehicles ?? [];
@@ -864,7 +881,11 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           ...step2Data,
           name: fullName,
           email: email,
-          phone: step2Data?.phone ? formatBookingPhoneNumber(step2Data.phone) : "",
+          phone: step2Data?.phone
+            ? formatBookingPhoneNumber(step2Data.phone)
+            : currentUser?.phone
+              ? formatBookingPhoneNumber(currentUser.phone)
+              : "",
           smsOptIn:
             step2Data?.smsOptIn ??
             currentUser?.notificationPreferences?.operationalSmsConsent
@@ -872,8 +893,38 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
             false,
         });
       }
+
+      if (!currentValues.phone && currentUser?.phone) {
+        const phone = formatBookingPhoneNumber(currentUser.phone);
+        step2Form.setValue("phone", phone);
+        setStep2Data({
+          name: currentValues.name ?? "",
+          email: currentValues.email ?? "",
+          phone,
+          smsOptIn: currentValues.smsOptIn ?? false,
+        });
+      }
     }
-  }, [isLoaded, isSignedIn, user, step2Form, setStep2Data, step2Data, currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn]);
+  }, [isLoaded, isSignedIn, user, step2Form, setStep2Data, step2Data, currentUser, currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn]);
+
+  // Auto-fill the first vehicle entry from the signed-in user's saved
+  // vehicles while it is still completely empty.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    if (!myVehicles || myVehicles.length === 0) return;
+    const currentVehicles = step3Form.getValues("vehicles") || [];
+    if (currentVehicles.length !== 1) return;
+    const only = currentVehicles[0];
+    if (only.year || only.make || only.model) return;
+    const first = myVehicles[0];
+    step3Form.setValue("vehicles", [buildSavedVehicleEntry(first)], {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setUsedSavedVehicleIds((prev) =>
+      prev.includes(first._id) ? prev : [first._id],
+    );
+  }, [isLoaded, isSignedIn, myVehicles, step3Form]);
 
   useEffect(() => {
     if (!currentUser || step2Data?.smsOptIn !== undefined) {
@@ -1022,6 +1073,65 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         return prev;
       });
     }
+  };
+
+  const [usedSavedVehicleIds, setUsedSavedVehicleIds] = useState<
+    Id<"vehicles">[]
+  >([]);
+
+  const buildSavedVehicleEntry = (
+    vehicle: SavedVehicleOption,
+  ): VehicleLookupValue => ({
+    year: String(vehicle.year),
+    make: vehicle.make,
+    model: vehicle.model,
+    color: vehicle.color || "",
+    licensePlate: vehicle.licensePlate || "",
+    size: vehicle.size,
+    vehicleTypeId: vehicle.vehicleTypeId,
+    classification: vehicle.classification,
+    hasPet: false,
+    hasHeavySoil: false,
+    beforePhotos: [],
+  });
+
+  const isSavedVehicleAdded = (vehicle: SavedVehicleOption) =>
+    usedSavedVehicleIds.includes(vehicle._id);
+
+  const addSavedVehicle = (vehicle: SavedVehicleOption) => {
+    if (usedSavedVehicleIds.includes(vehicle._id)) return;
+    const entry = buildSavedVehicleEntry(vehicle);
+    const currentVehicles = step3Form.getValues("vehicles") || [];
+    const emptyIndex = currentVehicles.findIndex(
+      (v) => !v.year && !v.make && !v.model,
+    );
+    if (emptyIndex >= 0) {
+      updateVehicle(emptyIndex, entry);
+      setExpandedVehicleIndex(emptyIndex);
+    } else {
+      const nextVehicles = [...currentVehicles, entry];
+      step3Form.setValue("vehicles", nextVehicles);
+      setExpandedVehicleIndex(nextVehicles.length - 1);
+    }
+    setUsedSavedVehicleIds((prev) => [...prev, vehicle._id]);
+  };
+
+  const findSavedVehicleIdForEntry = (entry: VehicleLookupValue) =>
+    myVehicles?.find(
+      (sv) =>
+        String(sv.year) === entry.year &&
+        sv.make === entry.make &&
+        sv.model === entry.model &&
+        (sv.licensePlate || "") === (entry.licensePlate || ""),
+    )?._id;
+
+  const handleRemoveVehicle = (index: number) => {
+    const entry = step3Form.getValues("vehicles")?.[index];
+    const savedId = entry ? findSavedVehicleIdForEntry(entry) : undefined;
+    if (savedId) {
+      setUsedSavedVehicleIds((prev) => prev.filter((id) => id !== savedId));
+    }
+    removeVehicle(index);
   };
 
   const nextStep = async () => {
@@ -1928,6 +2038,59 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         {currentStep === 3 && (
           <Form {...step3Form}>
             <form className="space-y-6">
+              {isSignedIn && myVehicles && myVehicles.length > 0 && (
+                <div className="rounded-xl border border-border/60 bg-muted/10 p-4 space-y-3">
+                  <h3 className="text-sm font-semibold text-muted-foreground">
+                    Your saved vehicles
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {myVehicles.map((vehicle) => {
+                      const added = isSavedVehicleAdded(vehicle);
+                      return (
+                        <button
+                          key={vehicle._id}
+                          type="button"
+                          disabled={added}
+                          onClick={() => addSavedVehicle(vehicle)}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                            added
+                              ? "border-border/40 bg-muted/30 opacity-60 cursor-default"
+                              : "border-border hover:border-primary/50 hover:bg-background",
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+                              added
+                                ? "bg-muted text-muted-foreground"
+                                : "bg-primary/10 text-primary",
+                            )}
+                          >
+                            {added ? (
+                              <CheckCircle2 className="w-4 h-4" />
+                            ) : (
+                              <Car className="w-4 h-4" />
+                            )}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-sm font-medium truncate">
+                              {vehicle.year} {vehicle.make} {vehicle.model}
+                            </span>
+                            <span className="block text-xs text-muted-foreground truncate">
+                              {vehicle.vehicleType?.name || vehicle.color || ""}
+                            </span>
+                          </span>
+                          <span className="text-xs font-medium shrink-0">
+                            {added ? "Added" : "Use"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-muted-foreground">Vehicle Details</h3>
@@ -1951,7 +2114,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     showLicensePlate
                     showPetToggle
                     showBeforePhotos
-                    onRemove={index > 0 ? () => removeVehicle(index) : undefined}
+                    onRemove={index > 0 ? () => handleRemoveVehicle(index) : undefined}
                     isExpanded={expandedVehicleIndex === index}
                     onToggleExpanded={() => setExpandedVehicleIndex(index)}
                   />
