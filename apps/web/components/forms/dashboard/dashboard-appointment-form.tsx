@@ -22,17 +22,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import AddressInput from "@/components/ui/address-input";
 import { ServiceCard } from "@/components/home/service-card";
 import { TimeSlotPicker } from "@/components/home/time-slot-picker";
@@ -41,6 +41,8 @@ import {
   ArrowRight,
   Car,
   Check,
+  ChevronDown,
+  ChevronUp,
   MapPin,
   Plus,
 } from "lucide-react";
@@ -127,14 +129,21 @@ export function DashboardAppointmentForm({
   } | null>(null);
 
   // Form state
-  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<string[]>([]);
+  const [packageByVehicle, setPackageByVehicle] = useState<
+    Record<string, Id<"services"> | null>
+  >({});
+  const [extrasByVehicle, setExtrasByVehicle] = useState<
+    Record<string, Id<"services">[]>
+  >({});
+  const [petFeeByVehicle, setPetFeeByVehicle] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [expandedVehicleId, setExpandedVehicleId] = useState<string | null>(
     null,
   );
-  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
-  const [selectedStandardId, setSelectedStandardId] = useState<string | null>(
-    null,
-  );
-  const [hasPetFee, setHasPetFee] = useState(false);
+  const [activeServiceSectionByVehicle, setActiveServiceSectionByVehicle] =
+    useState<Record<string, "packages" | "addons" | "subscriptions" | "">>({});
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
   const [street, setStreet] = useState("");
@@ -252,7 +261,8 @@ export function DashboardAppointmentForm({
   // Pre-select vehicle when provided
   React.useEffect(() => {
     if (open && preselectedVehicleId) {
-      setSelectedVehicleId(preselectedVehicleId);
+      setSelectedVehicleIds([preselectedVehicleId]);
+      setExpandedVehicleId(preselectedVehicleId);
       setCurrentStep(2);
     }
   }, [open, preselectedVehicleId]);
@@ -261,10 +271,12 @@ export function DashboardAppointmentForm({
   React.useEffect(() => {
     if (!open) {
       setCurrentStep(1);
-      setSelectedVehicleId(null);
-      setSelectedServiceIds([]);
-      setSelectedStandardId(null);
-      setHasPetFee(false);
+      setSelectedVehicleIds([]);
+      setPackageByVehicle({});
+      setExtrasByVehicle({});
+      setPetFeeByVehicle({});
+      setExpandedVehicleId(null);
+      setActiveServiceSectionByVehicle({});
       setScheduledDate("");
       setScheduledTime("");
       setLocationNotes("");
@@ -278,144 +290,119 @@ export function DashboardAppointmentForm({
   }, [hasSavedAddress, open, selectNewAddress, selectSavedAddress]);
 
   // Derived state
-  const selectedVehicle = userVehicles?.find(
-    (v) => v._id === selectedVehicleId,
-  );
-  const vehicleSize: VehicleSize =
-    (selectedVehicle?.size as VehicleSize) || "medium";
-  const vehicleTypeId = selectedVehicle?.vehicleTypeId ?? null;
-  const vehiclePricingContext = useMemo(
-    () => ({ vehicleSize, vehicleTypeId }),
-    [vehicleSize, vehicleTypeId],
+  const selectedVehicles = useMemo(
+    () =>
+      (userVehicles ?? []).filter((v) => selectedVehicleIds.includes(v._id)),
+    [userVehicles, selectedVehicleIds],
   );
 
-  const activeServices = useMemo(
-    () =>
-      services?.filter((service) =>
-        isServiceAvailableForVehicle(service, vehiclePricingContext),
-      ) ?? [],
-    [services, vehiclePricingContext],
-  );
+  const getVehiclePricingContext = (vehicle: DashboardVehicleOption) => ({
+    vehicleSize: ((vehicle.size as VehicleSize) || "medium") as VehicleSize,
+    vehicleTypeId: vehicle.vehicleTypeId ?? null,
+  });
 
-  const standardServices = useMemo(
-    () =>
-      activeServices.filter(
-        (s) => normalizeServiceType(s.serviceType) === "standard",
-      ),
-    [activeServices],
-  );
-  const addonServices = useMemo(
-    () =>
-      activeServices.filter(
-        (s) => normalizeServiceType(s.serviceType) === "addon",
-      ),
-    [activeServices],
-  );
-  const subscriptionServices = useMemo(
-    () =>
-      activeServices.filter(
-        (s) => normalizeServiceType(s.serviceType) === "subscription",
-      ),
-    [activeServices],
-  );
+  const getVehicleActiveServices = (vehicle: DashboardVehicleOption) =>
+    services?.filter((service) =>
+      isServiceAvailableForVehicle(service, getVehiclePricingContext(vehicle)),
+    ) ?? [];
 
-  React.useEffect(() => {
-    if (
-      selectedStandardId &&
-      !standardServices.some((service) => service._id === selectedStandardId)
-    ) {
-      setSelectedStandardId(null);
-    }
-
-    const availableOptionalIds = new Set<string>(
-      [...addonServices, ...subscriptionServices].map((service) => service._id),
+  const getVehicleOptionalServiceIds = (vehicle: DashboardVehicleOption) => {
+    const active = getVehicleActiveServices(vehicle);
+    return new Set(
+      active
+        .filter(
+          (s) =>
+            normalizeServiceType(s.serviceType) === "addon" ||
+            normalizeServiceType(s.serviceType) === "subscription",
+        )
+        .map((s) => s._id),
     );
-    setSelectedServiceIds((current) =>
-      current.filter((serviceId) => availableOptionalIds.has(serviceId)),
+  };
+
+  const getVehicleServiceIds = (vehicle: DashboardVehicleOption) => {
+    const active = getVehicleActiveServices(vehicle);
+    const activeIds = new Set(active.map((s) => s._id));
+    const optionalIds = getVehicleOptionalServiceIds(vehicle);
+    const extras = (extrasByVehicle[vehicle._id] ?? []).filter((id) =>
+      optionalIds.has(id),
     );
-  }, [
-    addonServices,
-    selectedStandardId,
-    standardServices,
-    subscriptionServices,
-  ]);
+    const pkg = packageByVehicle[vehicle._id];
+    return pkg && activeIds.has(pkg) ? [pkg, ...extras] : extras;
+  };
 
-  // All selected service IDs (standard + addons + subscriptions)
-  const allSelectedServiceIds = useMemo(() => {
-    const ids = [...selectedServiceIds];
-    if (selectedStandardId && !ids.includes(selectedStandardId)) {
-      ids.unshift(selectedStandardId);
-    }
-    return ids;
-  }, [selectedStandardId, selectedServiceIds]);
+  const getVehicleServicesTotal = (vehicle: DashboardVehicleOption) =>
+    getVehicleServiceIds(vehicle).reduce((sum, serviceId) => {
+      const service = getVehicleActiveServices(vehicle).find(
+        (s) => s._id === serviceId,
+      );
+      return service
+        ? sum +
+            getEffectiveServicePricingForVehicle(
+              service,
+              getVehiclePricingContext(vehicle),
+            ).price
+        : sum;
+    }, 0);
 
-  const selectedServicesData = useMemo(
-    () => activeServices.filter((s) => allSelectedServiceIds.includes(s._id)),
-    [activeServices, allSelectedServiceIds],
-  );
-
-  const serviceTotal = useMemo(
-    () =>
-      selectedServicesData.reduce(
-        (sum, service) =>
-          sum +
-          getEffectiveServicePricingForVehicle(
-            service,
-            vehiclePricingContext,
-          ).price,
-        0,
-      ),
-    [selectedServicesData, vehiclePricingContext],
-  );
-
-  const petFeeTotal = useMemo(() => {
-    if (!hasPetFee) return 0;
+  const getVehiclePetFee = (vehicle: DashboardVehicleOption) => {
+    if (!petFeeByVehicle[vehicle._id]) return 0;
     if (petFeeSettings?.isActive === false) return 0;
-    if (vehicleSize === "small") {
+    const size = ((vehicle.size as VehicleSize) || "medium") as VehicleSize;
+    if (size === "small") {
       return petFeeSettings?.basePriceSmall ?? petFeeSettings?.basePriceMedium ?? 50;
     }
-    if (vehicleSize === "large") {
+    if (size === "large") {
       return petFeeSettings?.basePriceLarge ?? petFeeSettings?.basePriceMedium ?? 50;
     }
     return petFeeSettings?.basePriceMedium ?? 50;
-  }, [hasPetFee, petFeeSettings, vehicleSize]);
+  };
 
-  const depositTotal = 50; // $50 deposit per vehicle
+  const serviceTotal = selectedVehicles.reduce(
+    (sum, vehicle) => sum + getVehicleServicesTotal(vehicle),
+    0,
+  );
+  const petFeeTotal = selectedVehicles.reduce(
+    (sum, vehicle) => sum + getVehiclePetFee(vehicle),
+    0,
+  );
+  const petFeeVehicleCount = selectedVehicles.filter(
+    (v) => petFeeByVehicle[v._id] && petFeeSettings?.isActive !== false,
+  ).length;
+  const depositTotal = 50 * Math.max(selectedVehicleIds.length, 1);
   const travelFeeTotal = travelQuote?.fee ?? 0;
   const orderTotal = serviceTotal + petFeeTotal + travelFeeTotal;
-  const dueNow = paymentOption === "full" ? orderTotal : Math.min(depositTotal, orderTotal);
-  const schedulingDuration = useMemo(
-    () =>
-      calculateSchedulingDuration({
-        serviceDurations: selectedServicesData.map(
-          (service) =>
-            getEffectiveServicePricingForVehicle(
-              service,
-              vehiclePricingContext,
-            ).duration,
-        ),
-        petFeeVehicleCount:
-          hasPetFee && petFeeSettings?.isActive !== false ? 1 : 0,
-        petFeeTimeMinutes: petFeeSettings?.timeAddMinutes,
-        travelBufferMinutes: travelQuote?.bufferMinutes,
-      }),
-    [
-      hasPetFee,
-      petFeeSettings?.isActive,
-      petFeeSettings?.timeAddMinutes,
-      selectedServicesData,
-      travelQuote?.bufferMinutes,
-      vehiclePricingContext,
-    ],
-  );
+  const dueNow =
+    paymentOption === "full" ? orderTotal : Math.min(depositTotal, orderTotal);
+  const schedulingDuration = calculateSchedulingDuration({
+    serviceDurations: selectedVehicles.flatMap((vehicle) => {
+      const ctx = getVehiclePricingContext(vehicle);
+      return getVehicleServiceIds(vehicle).map((serviceId) => {
+        const service = getVehicleActiveServices(vehicle).find(
+          (s) => s._id === serviceId,
+        );
+        return service
+          ? getEffectiveServicePricingForVehicle(service, ctx).duration
+          : 0;
+      });
+    }),
+    petFeeVehicleCount: petFeeVehicleCount,
+    petFeeTimeMinutes: petFeeSettings?.timeAddMinutes,
+    travelBufferMinutes: travelQuote?.bufferMinutes,
+  });
 
   // Step validation
   const canAdvance = (step: number): boolean => {
     switch (step) {
       case 1:
-        return !!selectedVehicleId;
+        return selectedVehicleIds.length > 0;
       case 2:
-        return !!selectedStandardId;
+        return (
+          selectedVehicles.length > 0 &&
+          selectedVehicles.every((vehicle) => {
+            const pkg = packageByVehicle[vehicle._id];
+            return !!pkg && getVehicleServiceIds(vehicle).includes(pkg);
+          })
+        );
       case 3:
         return !!scheduledDate && !!scheduledTime && !!street && !!city && !!state && !!zip;
       case 4:
@@ -437,15 +424,24 @@ export function DashboardAppointmentForm({
     }
   };
 
-  const handleAddonToggle = (serviceId: string, selected: boolean) => {
-    setSelectedServiceIds((prev) =>
-      selected ? [...prev, serviceId] : prev.filter((id) => id !== serviceId),
-    );
+  const handleAddonToggle = (
+    vehicleId: string,
+    serviceId: Id<"services">,
+    selected: boolean,
+  ) => {
+    setExtrasByVehicle((prev) => {
+      const current = prev[vehicleId] ?? [];
+      return {
+        ...prev,
+        [vehicleId]: selected
+          ? [...current, serviceId]
+          : current.filter((id) => id !== serviceId),
+      };
+    });
   };
 
   const onSubmit = async () => {
-    if (!currentUser || !selectedVehicleId || allSelectedServiceIds.length === 0)
-      return;
+    if (!currentUser || selectedVehicleIds.length === 0) return;
 
     setIsLoading(true);
     try {
@@ -461,11 +457,19 @@ export function DashboardAppointmentForm({
           zip,
           notes: locationNotes || undefined,
         },
-        existingVehicleIds: [selectedVehicleId] as Id<"vehicles">[],
-        petFeeExistingVehicleIds: hasPetFee
-          ? ([selectedVehicleId] as Id<"vehicles">[])
-          : [],
-        serviceIds: allSelectedServiceIds as Id<"services">[],
+        existingVehicleIds: selectedVehicleIds as Id<"vehicles">[],
+        existingVehicleServices: selectedVehicles.map((vehicle) => ({
+          vehicleId: vehicle._id as Id<"vehicles">,
+          serviceIds: getVehicleServiceIds(vehicle) as Id<"services">[],
+        })),
+        petFeeExistingVehicleIds: selectedVehicles
+          .filter((vehicle) => petFeeByVehicle[vehicle._id])
+          .map((vehicle) => vehicle._id as Id<"vehicles">),
+        serviceIds: Array.from(
+          new Set(
+            selectedVehicles.flatMap((vehicle) => getVehicleServiceIds(vehicle)),
+          ),
+        ) as Id<"services">[],
         scheduledDate,
         scheduledTime,
         paymentOption,
@@ -527,59 +531,72 @@ export function DashboardAppointmentForm({
           <div className="space-y-4">
             {userVehicles && userVehicles.length > 0 ? (
               <div className="space-y-3">
-                {userVehicles.map((vehicle) => (
-                  <div
-                    key={vehicle._id}
-                    onClick={() => setSelectedVehicleId(vehicle._id)}
-                    className={cn(
-                      "group relative flex cursor-pointer rounded-xl border-2 p-4 transition-all duration-200 hover:shadow-md",
-                      selectedVehicleId === vehicle._id
-                        ? "border-primary bg-primary/5 shadow-sm"
-                        : "border-muted hover:border-primary/50",
-                    )}
-                  >
-                    <div className="flex items-center gap-4 flex-1">
-                      <div
-                        className={cn(
-                          "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
-                          selectedVehicleId === vehicle._id
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground",
-                        )}
-                      >
-                        <Car className="w-5 h-5" />
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-semibold">
-                          {vehicle.year} {vehicle.make} {vehicle.model}
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          {vehicle.color && `${vehicle.color} · `}
-                          {vehicle.licensePlate && `${vehicle.licensePlate}`}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {vehicle.size && (
-                          <Badge variant="secondary" className="text-xs">
-                            {SIZE_LABELS[vehicle.size] || vehicle.size}
-                          </Badge>
-                        )}
+                <p className="text-xs text-muted-foreground">
+                  Select one or more vehicles — services are chosen per vehicle
+                  in the next step.
+                </p>
+                {userVehicles.map((vehicle) => {
+                  const isSelected = selectedVehicleIds.includes(vehicle._id);
+                  return (
+                    <div
+                      key={vehicle._id}
+                      onClick={() =>
+                        setSelectedVehicleIds((current) =>
+                          current.includes(vehicle._id)
+                            ? current.filter((id) => id !== vehicle._id)
+                            : [...current, vehicle._id],
+                        )
+                      }
+                      className={cn(
+                        "group relative flex cursor-pointer rounded-xl border-2 p-4 transition-all duration-200 hover:shadow-md",
+                        isSelected
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-muted hover:border-primary/50",
+                      )}
+                    >
+                      <div className="flex items-center gap-4 flex-1">
                         <div
                           className={cn(
-                            "h-6 w-6 rounded-full border-2 flex items-center justify-center transition-all",
-                            selectedVehicleId === vehicle._id
-                              ? "border-primary bg-primary text-primary-foreground"
-                              : "border-muted-foreground/30",
+                            "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
+                            isSelected
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground",
                           )}
                         >
-                          {selectedVehicleId === vehicle._id && (
-                            <Check className="h-3.5 w-3.5 stroke-[3]" />
+                          <Car className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-semibold">
+                            {vehicle.year} {vehicle.make} {vehicle.model}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {vehicle.color && `${vehicle.color} · `}
+                            {vehicle.licensePlate && `${vehicle.licensePlate}`}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {vehicle.size && (
+                            <Badge variant="secondary" className="text-xs">
+                              {SIZE_LABELS[vehicle.size] || vehicle.size}
+                            </Badge>
                           )}
+                          <div
+                            className={cn(
+                              "h-6 w-6 rounded-md border-2 flex items-center justify-center transition-all",
+                              isSelected
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-muted-foreground/30",
+                            )}
+                          >
+                            {isSelected && (
+                              <Check className="h-3.5 w-3.5 stroke-[3]" />
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-center py-8">
@@ -601,117 +618,287 @@ export function DashboardAppointmentForm({
 
         {/* Step 2: Service Selection */}
         {currentStep === 2 && (
-          <div className="space-y-2">
-            <Accordion
-              type="multiple"
-              defaultValue={["standard", "addons", "subscriptions"]}
-              className="space-y-2"
-            >
-              {/* Standard Packages */}
-              {standardServices.length > 0 && (
-                <AccordionItem value="standard">
-                  <AccordionTrigger className="text-sm font-semibold">
-                    Standard Packages
-                    <Badge variant="outline" className="ml-2 text-xs">
-                      Required
-                    </Badge>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="space-y-3">
-                      {standardServices.map((service) => (
-                        <ServiceCard
-                          key={service._id}
-                          service={service}
-                          vehicleSize={vehicleSize}
-                          vehicleTypeId={vehicleTypeId}
-                          isSelected={selectedStandardId === service._id}
-                          onSelect={(selected) =>
-                            setSelectedStandardId(
-                              selected ? service._id : null,
-                            )
-                          }
-                        />
-                      ))}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              )}
+          <div className="space-y-3">
+            {selectedVehicles.map((vehicle, vIdx) => {
+              const ctx = getVehiclePricingContext(vehicle);
+              const active = getVehicleActiveServices(vehicle);
+              const standardServices = active.filter(
+                (s) => normalizeServiceType(s.serviceType) === "standard",
+              );
+              const addonServices = active.filter(
+                (s) => normalizeServiceType(s.serviceType) === "addon",
+              );
+              const subscriptionServices = active.filter(
+                (s) => normalizeServiceType(s.serviceType) === "subscription",
+              );
+              const serviceIds = getVehicleServiceIds(vehicle);
+              const selectedPackageId = packageByVehicle[vehicle._id] ?? null;
+              const selectedPackage = standardServices.find(
+                (s) => s._id === selectedPackageId,
+              );
+              const selectedPackagePrice = selectedPackage
+                ? getEffectiveServicePricingForVehicle(selectedPackage, ctx)
+                    .price
+                : null;
+              const selectedExtrasCount = serviceIds.filter(
+                (id) => id !== selectedPackageId,
+              ).length;
+              const isExpanded = expandedVehicleId === vehicle._id;
+              const activeSection =
+                activeServiceSectionByVehicle[vehicle._id] || "packages";
+              const vehicleTotal = getVehicleServicesTotal(vehicle);
 
-              {/* Add-ons */}
-              {addonServices.length > 0 && (
-                <AccordionItem value="addons">
-                  <AccordionTrigger className="text-sm font-semibold">
-                    Add-ons
-                    <Badge variant="outline" className="ml-2 text-xs">
-                      Optional
-                    </Badge>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="space-y-3">
-                      {addonServices.map((service) => (
-                        <ServiceCard
-                          key={service._id}
-                          service={service}
-                          vehicleSize={vehicleSize}
-                          vehicleTypeId={vehicleTypeId}
-                          isSelected={selectedServiceIds.includes(service._id)}
-                          onSelect={(selected) =>
-                            handleAddonToggle(service._id, selected)
-                          }
-                        />
-                      ))}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              )}
+              const renderSectionHeader = (
+                sectionKey: "packages" | "addons" | "subscriptions",
+                label: string,
+                badge: string,
+                summary: React.ReactNode,
+              ) => (
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-between p-3 bg-muted/20 hover:bg-muted/40 transition-colors font-medium text-sm text-foreground text-left"
+                  onClick={() =>
+                    setActiveServiceSectionByVehicle((prev) => ({
+                      ...prev,
+                      [vehicle._id]:
+                        (prev[vehicle._id] || "packages") === sectionKey
+                          ? ""
+                          : sectionKey,
+                    }))
+                  }
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="bg-accent/10 text-accent px-2 py-0.5 rounded text-[10px] font-bold">
+                      {badge}
+                    </span>
+                    {label}
+                  </span>
+                  <span className="text-muted-foreground text-xs font-normal flex items-center gap-1.5">
+                    {summary}
+                    {activeSection === sectionKey ? (
+                      <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                    )}
+                  </span>
+                </button>
+              );
 
-              {/* Recurring Plans */}
-              {subscriptionServices.length > 0 && (
-                <AccordionItem value="subscriptions">
-                  <AccordionTrigger className="text-sm font-semibold">
-                    Recurring Plans
-                    <Badge variant="outline" className="ml-2 text-xs">
-                      Optional
-                    </Badge>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="space-y-3">
-                      {subscriptionServices.map((service) => (
-                        <ServiceCard
-                          key={service._id}
-                          service={service}
-                          vehicleSize={vehicleSize}
-                          vehicleTypeId={vehicleTypeId}
-                          isSelected={selectedServiceIds.includes(service._id)}
-                          onSelect={(selected) =>
-                            handleAddonToggle(service._id, selected)
+              return (
+                <Card
+                  key={vehicle._id}
+                  className="gap-0 border border-border/60 overflow-hidden py-0"
+                >
+                  <button
+                    type="button"
+                    className="w-full text-left focus:outline-none"
+                    onClick={() =>
+                      setExpandedVehicleId(isExpanded ? null : vehicle._id)
+                    }
+                  >
+                    <CardHeader className="bg-muted/10 border-b border-border/40 hover:bg-muted/20 transition-colors cursor-pointer p-4">
+                      <CardTitle className="text-sm font-bold flex items-center justify-between w-full">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">
+                            {vIdx + 1}. {vehicle.year} {vehicle.make}{" "}
+                            {vehicle.model}
+                          </span>
+                          <span className="text-[10px] font-normal text-muted-foreground uppercase tracking-wider bg-muted/35 px-2 py-0.5 rounded-full border border-border/20">
+                            {(vehicle.size as string) || "medium"}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {vehicleTotal > 0 && (
+                            <span className="text-xs font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded-full border border-accent/20">
+                              ${vehicleTotal}
+                            </span>
+                          )}
+                          {isExpanded ? (
+                            <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                          )}
+                        </div>
+                      </CardTitle>
+                    </CardHeader>
+                  </button>
+                  {isExpanded && (
+                    <CardContent className="p-3 space-y-2">
+                      {/* Section 1: Choose a Package */}
+                      <div className="border border-border/40 rounded-lg overflow-hidden">
+                        {renderSectionHeader(
+                          "packages",
+                          "1. Choose Package",
+                          "REQUIRED",
+                          selectedPackage ? (
+                            <span className="text-accent font-semibold">
+                              {selectedPackage.name} (${selectedPackagePrice})
+                            </span>
+                          ) : (
+                            <span>Select one</span>
+                          ),
+                        )}
+                        {activeSection === "packages" && (
+                          <div className="p-3 border-t border-border/40">
+                            <div className="grid grid-cols-1 gap-3">
+                              {standardServices.map((service) => (
+                                <ServiceCard
+                                  key={service._id}
+                                  service={service}
+                                  vehicleSize={ctx.vehicleSize}
+                                  vehicleTypeId={ctx.vehicleTypeId}
+                                  isSelected={selectedPackageId === service._id}
+                                  onSelect={(selected) => {
+                                    setPackageByVehicle((prev) => ({
+                                      ...prev,
+                                      [vehicle._id]: selected
+                                        ? service._id
+                                        : null,
+                                    }));
+                                    if (selected) {
+                                      setActiveServiceSectionByVehicle(
+                                        (prev) => ({
+                                          ...prev,
+                                          [vehicle._id]: "addons",
+                                        }),
+                                      );
+                                    }
+                                  }}
+                                />
+                              ))}
+                              {standardServices.length === 0 && (
+                                <p className="text-sm text-muted-foreground italic">
+                                  No packages available for this vehicle.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Section 2: Add-ons */}
+                      {addonServices.length > 0 && (
+                        <div className="border border-border/40 rounded-lg overflow-hidden">
+                          {renderSectionHeader(
+                            "addons",
+                            "2. Add-ons & Upgrades",
+                            "OPTIONAL",
+                            selectedExtrasCount > 0 ? (
+                              <span className="text-accent font-semibold">
+                                {selectedExtrasCount} selected
+                              </span>
+                            ) : (
+                              <span>None</span>
+                            ),
+                          )}
+                          {activeSection === "addons" && (
+                            <div className="p-3 border-t border-border/40 grid grid-cols-1 gap-3">
+                              {addonServices.map((service) => (
+                                <ServiceCard
+                                  key={service._id}
+                                  service={service}
+                                  vehicleSize={ctx.vehicleSize}
+                                  vehicleTypeId={ctx.vehicleTypeId}
+                                  isSelected={serviceIds.includes(service._id)}
+                                  onSelect={(selected) =>
+                                    handleAddonToggle(
+                                      vehicle._id,
+                                      service._id,
+                                      selected,
+                                    )
+                                  }
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Section 3: Recurring Plans */}
+                      {subscriptionServices.length > 0 && (
+                        <div className="border border-border/40 rounded-lg overflow-hidden">
+                          {renderSectionHeader(
+                            "subscriptions",
+                            "3. Recurring Plans",
+                            "OPTIONAL",
+                            serviceIds.some((id) =>
+                              subscriptionServices.some((s) => s._id === id),
+                            ) ? (
+                              <span className="text-accent font-semibold">
+                                {
+                                  serviceIds.filter((id) =>
+                                    subscriptionServices.some(
+                                      (s) => s._id === id,
+                                    ),
+                                  ).length
+                                }{" "}
+                                selected
+                              </span>
+                            ) : (
+                              <span>None</span>
+                            ),
+                          )}
+                          {activeSection === "subscriptions" && (
+                            <div className="p-3 border-t border-border/40 grid grid-cols-1 gap-3">
+                              {subscriptionServices.map((service) => (
+                                <ServiceCard
+                                  key={service._id}
+                                  service={service}
+                                  vehicleSize={ctx.vehicleSize}
+                                  vehicleTypeId={ctx.vehicleTypeId}
+                                  isSelected={serviceIds.includes(service._id)}
+                                  onSelect={(selected) =>
+                                    handleAddonToggle(
+                                      vehicle._id,
+                                      service._id,
+                                      selected,
+                                    )
+                                  }
+                                />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Per-vehicle pet fee */}
+                      <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/10 px-3 py-2">
+                        <div>
+                          <p className="text-xs font-medium">
+                            Pet hair or pet travel fee
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            Adds the pet fee and extra time for this vehicle.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={!!petFeeByVehicle[vehicle._id]}
+                          onCheckedChange={(checked) =>
+                            setPetFeeByVehicle((prev) => ({
+                              ...prev,
+                              [vehicle._id]: checked,
+                            }))
                           }
                         />
-                      ))}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              )}
-            </Accordion>
+                      </div>
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })}
 
             {/* Running total */}
-            {allSelectedServiceIds.length > 0 && (
-              <div className="space-y-3 bg-muted/50 p-3 rounded-lg border border-border/50 mt-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-medium">Pet hair or pet travel</p>
-                    
-                  </div>
-                  <Switch checked={hasPetFee} onCheckedChange={setHasPetFee} />
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">Running Total</span>
-                  <span className="font-bold text-lg text-primary">
-                    ${orderTotal.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            )}
+            <div className="bg-muted/50 p-3 rounded-lg border border-border/50 flex items-center justify-between">
+              <span className="text-sm font-medium">
+                Running Total
+                {petFeeVehicleCount > 0
+                  ? ` · pet fees ×${petFeeVehicleCount}`
+                  : ""}
+              </span>
+              <span className="font-bold text-lg text-primary">
+                ${(serviceTotal + petFeeTotal).toFixed(2)}
+              </span>
+            </div>
           </div>
         )}
 
@@ -819,51 +1006,76 @@ export function DashboardAppointmentForm({
                 Order Summary
               </h3>
 
-              {/* Vehicle */}
-              {selectedVehicle && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Vehicle</span>
-                  <span className="font-medium">
-                    {selectedVehicle.year} {selectedVehicle.make}{" "}
-                    {selectedVehicle.model}
-                  </span>
-                </div>
-              )}
-
-              {/* Services */}
-              {selectedServicesData.map((service) => {
-                const price = getEffectiveServicePricingForVehicle(
-                  service,
-                  vehiclePricingContext,
-                ).price;
-                const isSubscription =
-                  normalizeServiceType(service.serviceType) === "subscription";
+              {/* Vehicles & Services */}
+              {selectedVehicles.map((vehicle) => {
+                const ctx = getVehiclePricingContext(vehicle);
+                const serviceIds = getVehicleServiceIds(vehicle);
                 return (
                   <div
-                    key={service._id}
-                    className="flex justify-between text-sm items-start gap-2"
+                    key={vehicle._id}
+                    className="space-y-1 border-t pt-2 first:border-t-0 first:pt-0"
                   >
-                    <button
-                      type="button"
-                      onClick={() => setReadingService({
-                        name: service.name,
-                        description: service.description || "No description available.",
-                        price: price
-                      })}
-                      className="text-left text-muted-foreground hover:text-primary transition-colors flex items-baseline gap-1.5 focus:outline-none"
-                    >
-                      <span className="border-b border-dashed border-muted-foreground/40 hover:border-primary">
-                        {service.name}
+                    <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      <span>
+                        {vehicle.year} {vehicle.make} {vehicle.model}
                       </span>
-                    </button>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="font-medium text-foreground">${price.toFixed(2)}</span>
-                      {isSubscription && (
-                        <span className="text-[10px] text-muted-foreground">
-                          /mo
-                        </span>
-                      )}
+                      <span>{(vehicle.size as string) || "medium"}</span>
                     </div>
+                    {serviceIds.map((serviceId) => {
+                      const service = getVehicleActiveServices(vehicle).find(
+                        (s) => s._id === serviceId,
+                      );
+                      if (!service) return null;
+                      const price = getEffectiveServicePricingForVehicle(
+                        service,
+                        ctx,
+                      ).price;
+                      const isSubscription =
+                        normalizeServiceType(service.serviceType) ===
+                        "subscription";
+                      return (
+                        <div
+                          key={serviceId}
+                          className="flex justify-between text-sm items-start gap-2"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReadingService({
+                                name: service.name,
+                                description:
+                                  service.description ||
+                                  "No description available.",
+                                price,
+                              })
+                            }
+                            className="text-left text-muted-foreground hover:text-primary transition-colors flex items-baseline gap-1.5 focus:outline-none"
+                          >
+                            <span className="border-b border-dashed border-muted-foreground/40 hover:border-primary">
+                              {service.name}
+                            </span>
+                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="font-medium text-foreground">
+                              ${price.toFixed(2)}
+                            </span>
+                            {isSubscription && (
+                              <span className="text-[10px] text-muted-foreground">
+                                /mo
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {getVehiclePetFee(vehicle) > 0 && (
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Pet fee</span>
+                        <span className="font-medium">
+                          ${getVehiclePetFee(vehicle).toFixed(2)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 );
               })}
