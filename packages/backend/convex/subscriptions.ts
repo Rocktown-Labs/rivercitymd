@@ -334,6 +334,11 @@ export const updateStatus = internalMutation({
     await ctx.db.patch(args.subscriptionId, {
       status: args.status,
     });
+    if (args.status === "cancelled") {
+      await ctx.runMutation(internal.subscriptions.cancelFutureAppointments, {
+        subscriptionId: args.subscriptionId,
+      });
+    }
   },
 });
 
@@ -384,6 +389,9 @@ export const cancel = mutation({
       status: "cancelled",
       stripeCheckoutSessionId: undefined,
     });
+    await ctx.runMutation(internal.subscriptions.cancelFutureAppointments, {
+      subscriptionId: args.subscriptionId,
+    });
 
     if (sub.stripeSubscriptionId) {
       await ctx.scheduler.runAfter(0, internal.subscriptions.cancelStripeSubscription, {
@@ -413,6 +421,9 @@ export const cancelByCustomer = mutation({
       status: "cancelled",
       stripeCheckoutSessionId: undefined,
     });
+    await ctx.runMutation(internal.subscriptions.cancelFutureAppointments, {
+      subscriptionId: args.subscriptionId,
+    });
     if (sub.stripeCheckoutSessionId) {
       await ctx.scheduler.runAfter(
         0,
@@ -433,8 +444,17 @@ export const cancelByCustomer = mutation({
 export const updateStartDateByCustomer = mutation({
   args: {
     subscriptionId: v.id("subscriptions"),
-    startDate: v.string(),
+    startDate: v.optional(v.string()),
     preferredTime: v.optional(v.string()),
+    location: v.optional(
+      v.object({
+        street: v.string(),
+        city: v.string(),
+        state: v.string(),
+        zip: v.string(),
+        notes: v.optional(v.string()),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const userId = await getUserIdFromIdentity(ctx);
@@ -442,19 +462,25 @@ export const updateStartDateByCustomer = mutation({
     const sub = await ctx.db.get(args.subscriptionId);
     if (!sub || sub.userId !== userId) throw new Error("Subscription not found");
     if (sub.status !== "pending_payment") {
-      throw new Error("The start date can only be changed before payment");
+      throw new Error("The schedule can only be changed before payment");
     }
-    validateStartDate(args.startDate);
+    if (args.startDate !== undefined) {
+      validateStartDate(args.startDate);
+    }
 
+    const scheduleChanged =
+      args.startDate !== undefined || args.preferredTime !== undefined;
     await ctx.db.patch(args.subscriptionId, {
-      startDate: args.startDate,
-      nextScheduledDate: args.startDate,
+      ...(args.startDate !== undefined
+        ? { startDate: args.startDate, nextScheduledDate: args.startDate }
+        : {}),
       ...(args.preferredTime !== undefined
         ? { preferredTime: args.preferredTime }
         : {}),
-      stripeCheckoutSessionId: undefined,
+      ...(args.location !== undefined ? { location: args.location } : {}),
+      ...(scheduleChanged ? { stripeCheckoutSessionId: undefined } : {}),
     });
-    if (sub.stripeCheckoutSessionId) {
+    if (scheduleChanged && sub.stripeCheckoutSessionId) {
       await ctx.scheduler.runAfter(
         0,
         internal.subscriptions.expireCheckoutSession,
@@ -585,8 +611,15 @@ export const handleCheckoutCompleted = internalAction({
       subscriptionId: args.subscriptionId,
       stripeSubscriptionId: args.stripeSubscriptionId,
     });
+    // Book the first service for the cycle just paid, then pre-schedule the
+    // next cycle so the admin calendar always shows the upcoming service.
     await ctx.runAction(internal.subscriptions.createNextAppointment, {
       subscriptionId: args.subscriptionId,
+      mode: "book",
+    });
+    await ctx.runAction(internal.subscriptions.createNextAppointment, {
+      subscriptionId: args.subscriptionId,
+      mode: "preschedule",
     });
     return null;
   },
@@ -612,8 +645,17 @@ export const handleRenewalInvoicePaid = internalAction({
       return null;
     }
 
+    // Confirm the cycle that was just paid (it was pre-scheduled as pending),
+    // then pre-schedule the following cycle.
+    if (sub.lastAppointmentId) {
+      await ctx.runMutation(internal.subscriptions.confirmCycleAppointment, {
+        subscriptionId: args.subscriptionId,
+        appointmentId: sub.lastAppointmentId,
+      });
+    }
     await ctx.runAction(internal.subscriptions.createNextAppointment, {
       subscriptionId: args.subscriptionId,
+      mode: "preschedule",
     });
 
     // Mark only after booking so a failed booking can still retry.
@@ -625,6 +667,82 @@ export const handleRenewalInvoicePaid = internalAction({
       },
     );
     return null;
+  },
+});
+
+// Confirms a pre-scheduled cycle appointment once its charge lands:
+// pending -> confirmed, draft invoice -> paid, stats updated, customer notified.
+export const confirmCycleAppointment = internalMutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    appointmentId: v.id("appointments"),
+  },
+  handler: async (ctx, args) => {
+    const appointment = await ctx.db.get(args.appointmentId);
+    if (!appointment || appointment.subscriptionId !== args.subscriptionId) {
+      return;
+    }
+    if (appointment.status !== "pending") return;
+
+    const sub = await ctx.db.get(args.subscriptionId);
+    if (!sub || sub.status === "cancelled" || sub.status === "paused") return;
+
+    await ctx.db.patch(args.appointmentId, { status: "confirmed" });
+
+    const invoice = await ctx.db
+      .query("invoices")
+      .withIndex("by_appointment", (q) =>
+        q.eq("appointmentId", args.appointmentId),
+      )
+      .first();
+    if (invoice && invoice.status === "draft") {
+      const today = new Date().toISOString().split("T")[0];
+      await ctx.db.patch(invoice._id, { status: "paid", paidDate: today });
+    }
+
+    const user = await ctx.db.get(sub.userId);
+    if (user) {
+      await ctx.runMutation(internal.users.updateStats, {
+        userId: sub.userId,
+        timesServiced: (user.timesServiced || 0) + 1,
+        totalSpent: (user.totalSpent || 0) + sub.totalPrice,
+      });
+    }
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.notifications.queueSubscriptionAppointmentScheduled,
+      {
+        subscriptionId: args.subscriptionId,
+        appointmentId: args.appointmentId,
+      },
+    );
+  },
+});
+
+// Cancels a subscription's future scheduled appointments when the
+// subscription itself is cancelled, so the admin calendar stays accurate.
+// Past and already-cancelled services are left untouched.
+export const cancelFutureAppointments = internalMutation({
+  args: { subscriptionId: v.id("subscriptions") },
+  handler: async (ctx, args) => {
+    const today = new Date().toISOString().split("T")[0];
+    const upcoming = await ctx.db
+      .query("appointments")
+      .withIndex("by_subscription", (q) =>
+        q.eq("subscriptionId", args.subscriptionId),
+      )
+      .filter((a) =>
+        a.or(
+          a.eq(a.field("status"), "pending"),
+          a.eq(a.field("status"), "confirmed"),
+        ),
+      )
+      .take(50);
+    for (const appointment of upcoming) {
+      if (appointment.scheduledDate < today) continue;
+      await ctx.db.patch(appointment._id, { status: "cancelled" });
+    }
   },
 });
 
@@ -967,7 +1085,13 @@ export const expireCheckoutSession = internalAction({
 });
 
 export const createNextAppointment = internalAction({
-  args: { subscriptionId: v.id("subscriptions") },
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    // "book" books the cycle being paid now (confirmed + paid invoice + stats).
+    // "preschedule" plans the next cycle ahead (pending + draft invoice), to be
+    // confirmed when that cycle's charge lands.
+    mode: v.optional(v.union(v.literal("book"), v.literal("preschedule"))),
+  },
   handler: async (ctx, args) => {
     const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
       subscriptionId: args.subscriptionId,
@@ -1019,9 +1143,11 @@ export const createNextAppointment = internalAction({
       },
     );
     const slotAvailable = availability.available;
+    const isPreschedule = args.mode === "preschedule";
 
-    // Create appointment. A slot conflict keeps it visible in the admin
-    // booking list as pending so it can be rescheduled there.
+    // Create appointment. Booked cycles are confirmed (a slot conflict keeps
+    // them in the admin booking list as pending for rescheduling);
+    // pre-scheduled cycles stay pending until their charge lands.
     const appointmentId = await ctx.runMutation(
       internal.subscriptions.insertAppointment,
       {
@@ -1035,12 +1161,16 @@ export const createNextAppointment = internalAction({
         totalPrice: sub.totalPrice,
         subscriptionId: args.subscriptionId,
         notes: slotAvailable
-          ? sub.notes
-            ? `[Subscription] ${sub.notes}`
-            : "[Subscription] Auto-scheduled"
-          : "[Subscription] Chosen time conflicts with another booking — needs rescheduling",
+          ? isPreschedule
+            ? "[Subscription] Pre-scheduled — confirms on payment"
+            : sub.notes
+              ? `[Subscription] ${sub.notes}`
+              : "[Subscription] Auto-scheduled"
+          : isPreschedule
+            ? "[Subscription] Pre-scheduled (slot conflict — needs rescheduling) — confirms on payment"
+            : "[Subscription] Chosen time conflicts with another booking — needs rescheduling",
         createdBy: sub.createdBy,
-        status: slotAvailable ? "confirmed" : "pending",
+        status: isPreschedule || !slotAvailable ? "pending" : "confirmed",
       },
     );
 
@@ -1070,9 +1200,9 @@ export const createNextAppointment = internalAction({
       subtotal: sub.totalPrice,
       tax: 0,
       total: sub.totalPrice,
-      status: "paid",
-      dueDate: today,
-      paidDate: today,
+      status: isPreschedule ? "draft" : "paid",
+      dueDate: isPreschedule ? nextDate : today,
+      paidDate: isPreschedule ? undefined : today,
       paymentOption: "subscription",
     });
 
@@ -1089,17 +1219,22 @@ export const createNextAppointment = internalAction({
       nextScheduledDate: futureDate,
     });
 
-    // Update user stats
-    await ctx.runMutation(internal.users.updateStats, {
-      userId: sub.userId,
-      timesServiced: (user.timesServiced || 0) + 1,
-      totalSpent: (user.totalSpent || 0) + sub.totalPrice,
-    });
+    // Update user stats when the cycle is actually booked/confirmed, not
+    // when it is only pre-scheduled ahead of its payment.
+    if (!isPreschedule) {
+      await ctx.runMutation(internal.users.updateStats, {
+        userId: sub.userId,
+        timesServiced: (user.timesServiced || 0) + 1,
+        totalSpent: (user.totalSpent || 0) + sub.totalPrice,
+      });
+    }
 
-    await ctx.runMutation(internal.notifications.queueSubscriptionAppointmentScheduled, {
-      subscriptionId: args.subscriptionId,
-      appointmentId,
-    });
+    if (!isPreschedule) {
+      await ctx.runMutation(internal.notifications.queueSubscriptionAppointmentScheduled, {
+        subscriptionId: args.subscriptionId,
+        appointmentId,
+      });
+    }
   },
 });
 
