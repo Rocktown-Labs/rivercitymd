@@ -10,6 +10,8 @@ const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/api/r2-upload-relay",
+  "/robots.txt",
+  "/sitemap.xml",
 ]);
 
 const isOnboardingRoute = createRouteMatcher(["/onboarding(.*)"]);
