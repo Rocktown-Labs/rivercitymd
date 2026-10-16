@@ -18,6 +18,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ### Changed
 - **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).
+- **Convex AI-Files State**: Record the current section hashes in `packages/backend/convex/_generated/ai/ai-files.state.json` so Convex CLI runs no longer "repair" the agent docs back to the pre-monorepo path.
 
 ## [v1.2.8] - 2026-09-14
 ### Changed
