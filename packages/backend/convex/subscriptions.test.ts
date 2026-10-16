@@ -12,7 +12,15 @@ let fetchCalls: { url: string; body?: string }[] = [];
 
 async function fetchCapture(url: string | URL, options?: RequestInit) {
   const urlString = typeof url === "string" ? url : url.toString();
-  if (urlString.includes("api.stripe.com")) {
+  // Parse the hostname rather than matching a substring so the mock cannot
+  // accidentally treat an arbitrary host as Stripe.
+  let isStripeUrl = false;
+  try {
+    isStripeUrl = new URL(urlString).hostname === "api.stripe.com";
+  } catch {
+    isStripeUrl = false;
+  }
+  if (isStripeUrl) {
     fetchCalls.push({
       url: urlString,
       body: options?.body ? String(options.body) : undefined,
