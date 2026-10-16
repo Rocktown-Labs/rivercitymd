@@ -1062,6 +1062,7 @@ export const sendSubscriptionCheckoutLink = internalAction({
         price: sub.totalPrice,
         startDate: sub.startDate || sub.nextScheduledDate,
         checkoutUrl: args.checkoutUrl,
+        dateSelectionRequired: !sub.startDate,
         logoUrl: logoUrl(),
       }),
     );
