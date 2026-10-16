@@ -12,6 +12,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Vercel Project Compatibility**: Run the Convex deployment only in projects with `CONVEX_DEPLOY_KEY`; build the separate web project against its configured Convex URL.
 - **Vercel Build Configuration**: Move the conditional deployment logic into the web package script to stay within Vercel's `buildCommand` length limit.
 - **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
+- **SEO Route Access**: Serve `/robots.txt` and `/sitemap.xml` to unauthenticated visitors so search engines can fetch crawl metadata instead of hitting the Clerk sign-in redirect.
 
 ## [v1.2.8] - 2026-09-14
 ### Changed
