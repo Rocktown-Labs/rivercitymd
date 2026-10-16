@@ -14,6 +14,9 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
 - **SEO Route Access**: Serve `/robots.txt` and `/sitemap.xml` to unauthenticated visitors so search engines can fetch crawl metadata instead of hitting the Clerk sign-in redirect.
 
+### Changed
+- **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).
+
 ## [v1.2.8] - 2026-09-14
 ### Changed
 - **Radar Driving Distance for Travel Fees**: Calculate travel fees using actual road driving distance from Radar's Route Distance API (`/v1/route/distance`) instead of straight-line (Haversine) distance, with graceful fallback to Haversine on network or service disruptions.
