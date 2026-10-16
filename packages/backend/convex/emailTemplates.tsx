@@ -1047,6 +1047,7 @@ export function SubscriptionCheckoutLinkEmail({
   price,
   startDate,
   checkoutUrl,
+  dateSelectionRequired,
   logoUrl,
 }: {
   customerName: string;
@@ -1056,11 +1057,15 @@ export function SubscriptionCheckoutLinkEmail({
   price: number;
   startDate?: string;
   checkoutUrl: string;
+  dateSelectionRequired?: boolean;
   logoUrl?: string;
 }) {
+  const frequencyLabel =
+    frequency === "monthly" ? "Monthly" : "Every 2 Weeks";
+  const cadence = frequency === "monthly" ? "month" : "2 weeks";
   return (
     <EmailLayout
-      preview={`Set up your recurring ${frequency} service with ${businessName}`}
+      preview={`Complete your recurring ${frequency} service with ${businessName}`}
       logoUrl={logoUrl}
       businessName={businessName}
     >
@@ -1069,28 +1074,34 @@ export function SubscriptionCheckoutLinkEmail({
       </Heading>
       <Text style={emailStyles.textBody}>
         Hi {customerName}, {businessName} has set up a recurring detailing
-        subscription for you. Complete the secure checkout below to activate
-        your {frequency} service.
+        subscription for you.{" "}
+        {dateSelectionRequired
+          ? "Choose the service day and time that work best for you, then complete your first payment to activate it."
+          : `Complete the secure checkout below to activate your ${frequencyLabel} service.`}
       </Text>
 
       <Section style={emailStyles.detailBox}>
         <DetailField label="Service" value={serviceName} />
-        <DetailField label="Frequency" value={frequency === "monthly" ? "Monthly" : "Every 2 Weeks"} />
-        <DetailField label="Price" value={`$${price.toFixed(2)} / ${frequency === "monthly" ? "month" : "2 weeks"}`} />
-        {startDate ? <DetailField label="Service starts" value={startDate} /> : null}
+        <DetailField label="Frequency" value={frequencyLabel} />
+        <DetailField label="Price" value={`$${price.toFixed(2)} / ${cadence}`} />
+        {startDate && !dateSelectionRequired ? (
+          <DetailField label="First service" value={startDate} />
+        ) : null}
       </Section>
 
       <Section style={{ textAlign: "center", marginBottom: "24px" }}>
         <Button href={checkoutUrl} style={emailStyles.primaryButton}>
-          Set Up Payment
+          {dateSelectionRequired
+            ? "Choose Date & Pay"
+            : "Pay & Start Subscription"}
         </Button>
       </Section>
 
       <Hr style={emailStyles.hr} />
       <Text style={{ ...emailStyles.text, fontSize: "13px" }}>
-        This link will take you to a secure Stripe checkout page. Your card
-        will be saved securely and charged automatically on the selected start
-        date and each billing cycle after that.
+        {dateSelectionRequired
+          ? `The button takes you to your dashboard, where you pick from available time slots. Your card is charged $${price.toFixed(2)} the day you complete checkout and every ${cadence} after that.`
+          : `This link will take you to a secure Stripe checkout page. Your card will be charged $${price.toFixed(2)} today when you complete checkout and every ${cadence} after that.${startDate ? ` Your first service is scheduled for ${startDate}.` : ""}`}
       </Text>
     </EmailLayout>
   );

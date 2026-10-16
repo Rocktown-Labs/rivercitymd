@@ -609,6 +609,7 @@ const schema = defineSchema({
     ),
     nextScheduledDate: v.optional(v.string()),
     lastAppointmentId: v.optional(v.id("appointments")),
+    lastRenewalStripeInvoiceId: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
     isTest: v.optional(v.boolean()),

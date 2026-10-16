@@ -8,7 +8,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import { getUserIdFromIdentity, requireAdmin, isAdmin } from "./auth";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { getEffectiveServicePrice, type VehicleSize } from "./lib/pricing";
 
@@ -107,14 +107,22 @@ export const getByUser = query({
         const vehicles = await Promise.all(
           sub.vehicleIds.map((id) => ctx.db.get(id)),
         );
+        const serviceDocs = services.filter(
+          (s): s is Doc<"services"> => s !== null,
+        );
+        const vehicleDocs = vehicles.filter(
+          (v): v is Doc<"vehicles"> => v !== null,
+        );
         return {
           ...sub,
-          serviceNames: services
-            .filter((s): s is Doc<"services"> => s !== null)
-            .map((s) => s.name),
-          vehicleNames: vehicles
-            .filter((v): v is Doc<"vehicles"> => v !== null)
-            .map((v) => `${v.year} ${v.make} ${v.model}`),
+          serviceNames: serviceDocs.map((s) => s.name),
+          vehicleNames: vehicleDocs.map(
+            (v) => `${v.year} ${v.make} ${v.model}`,
+          ),
+          // Used by the dashboard slot picker to fetch availability windows.
+          estimatedDurationMinutes:
+            serviceDocs.reduce((sum, s) => sum + s.duration, 0) *
+            sub.vehicleIds.length,
         };
       }),
     );
@@ -200,6 +208,7 @@ export const create = mutation({
     preferredDayOfWeek: v.number(),
     startDate: v.optional(v.string()),
     preferredTime: v.string(),
+    letCustomerChooseDate: v.optional(v.boolean()),
     location: v.object({
       street: v.string(),
       city: v.string(),
@@ -241,8 +250,14 @@ export const create = mutation({
       }
     }
 
-    const startDate = args.startDate || computeFirstDate(args.preferredDayOfWeek);
-    validateStartDate(startDate);
+    // When the customer picks the date, leave it unset until they choose a
+    // slot at payment time; the checkout link then goes to the dashboard.
+    const startDate = args.letCustomerChooseDate
+      ? undefined
+      : args.startDate || computeFirstDate(args.preferredDayOfWeek);
+    if (startDate) {
+      validateStartDate(startDate);
+    }
 
     const subscriptionId = await ctx.db.insert("subscriptions", {
       userId: args.userId,
@@ -419,6 +434,7 @@ export const updateStartDateByCustomer = mutation({
   args: {
     subscriptionId: v.id("subscriptions"),
     startDate: v.string(),
+    preferredTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getUserIdFromIdentity(ctx);
@@ -433,6 +449,9 @@ export const updateStartDateByCustomer = mutation({
     await ctx.db.patch(args.subscriptionId, {
       startDate: args.startDate,
       nextScheduledDate: args.startDate,
+      ...(args.preferredTime !== undefined
+        ? { preferredTime: args.preferredTime }
+        : {}),
       stripeCheckoutSessionId: undefined,
     });
     if (sub.stripeCheckoutSessionId) {
@@ -512,6 +531,115 @@ export const updateAfterAppointment = internalMutation({
   },
 });
 
+// Idempotency lookup: has this subscription already booked this date?
+export const findAppointmentForSubscriptionDate = internalQuery({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    scheduledDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const appointments = await ctx.db
+      .query("appointments")
+      .withIndex("by_date", (q) => q.eq("scheduledDate", args.scheduledDate))
+      .filter((a) => a.eq(a.field("subscriptionId"), args.subscriptionId))
+      .take(5);
+    return appointments[0] ?? null;
+  },
+});
+
+// Handles a completed subscription-mode Checkout Session: activates the
+// subscription (idempotently) and books the first service appointment.
+// Called from the Stripe webhook for both completed and async-succeeded
+// sessions, so it must tolerate duplicate delivery.
+export const handleCheckoutCompleted = internalAction({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    stripeSubscriptionId: v.string(),
+    paymentStatus: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub || sub.status === "cancelled") return null;
+
+    // Duplicate delivery: this checkout was already handled.
+    if (
+      sub.status === "active" &&
+      sub.stripeSubscriptionId === args.stripeSubscriptionId
+    ) {
+      return null;
+    }
+
+    // Delayed payment methods: wait for async_payment_succeeded before
+    // activating or booking.
+    if (args.paymentStatus && args.paymentStatus !== "paid") {
+      console.info(
+        `[subscriptions] checkout session completed without payment (status=${args.paymentStatus}); waiting for async confirmation`,
+      );
+      return null;
+    }
+
+    await ctx.runMutation(internal.subscriptions.activate, {
+      subscriptionId: args.subscriptionId,
+      stripeSubscriptionId: args.stripeSubscriptionId,
+    });
+    await ctx.runAction(internal.subscriptions.createNextAppointment, {
+      subscriptionId: args.subscriptionId,
+    });
+    return null;
+  },
+});
+
+// Handles a paid subscription renewal invoice (billing_reason
+// "subscription_cycle"): books the next service appointment exactly once
+// per Stripe invoice, so webhook retries cannot double-book cycles.
+export const handleRenewalInvoicePaid = internalAction({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    stripeInvoiceId: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub) return null;
+
+    // Duplicate delivery of the same renewal invoice.
+    if (sub.lastRenewalStripeInvoiceId === args.stripeInvoiceId) {
+      return null;
+    }
+
+    await ctx.runAction(internal.subscriptions.createNextAppointment, {
+      subscriptionId: args.subscriptionId,
+    });
+
+    // Mark only after booking so a failed booking can still retry.
+    await ctx.runMutation(
+      internal.subscriptions.markRenewalInvoiceProcessed,
+      {
+        subscriptionId: args.subscriptionId,
+        stripeInvoiceId: args.stripeInvoiceId,
+      },
+    );
+    return null;
+  },
+});
+
+export const markRenewalInvoiceProcessed = internalMutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    stripeInvoiceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.subscriptionId, {
+      lastRenewalStripeInvoiceId: args.stripeInvoiceId,
+    });
+  },
+});
+
 // --- Actions ---
 
 export const createCheckoutSession = internalAction({
@@ -563,21 +691,79 @@ export const createCheckoutSession = internalAction({
       }
     }
 
-    // Compute total in cents for subscription
-    // Use price_data with the computed total rather than individual recurring prices
+    // Bill the day it's paid: a full payment-style subscription Checkout that
+    // charges the first cycle immediately and recurs from the payment date.
+    // The selected service date/time only schedules the first appointment.
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL ||
       process.env.NEXT_PUBLIC_SITE_URL ||
       "https://rivercitymd.vercel.app";
 
+    if (!sub.startDate) {
+      // The customer has not chosen a service date yet. Email a dashboard
+      // link so they can pick their date and time, then pay from there.
+      const dashboardUrl = `${appUrl}/dashboard/subscriptions`;
+      await ctx.runAction(internal.subscriptions.sendCheckoutLink, {
+        subscriptionId: args.subscriptionId,
+        checkoutUrl: dashboardUrl,
+      });
+      return dashboardUrl;
+    }
+
+    // Validate the chosen slot against availability before creating the
+    // charge-enabled checkout session.
+    let totalDuration = 0;
+    const serviceNames: string[] = [];
+    for (const serviceId of sub.serviceIds) {
+      const service = await ctx.runQuery(internal.services.getServiceById, {
+        serviceId,
+      });
+      if (service) {
+        totalDuration += service.duration * sub.vehicleIds.length;
+        serviceNames.push(service.name);
+      }
+    }
+    const availability = await ctx.runQuery(
+      api.availability.checkAvailability,
+      {
+        date: sub.nextScheduledDate || sub.startDate,
+        startTime: sub.preferredTime,
+        duration: totalDuration,
+      },
+    );
+    if (!availability.available) {
+      throw new Error(
+        `That time slot is no longer available${availability.reason ? ` (${availability.reason})` : ""}. Please choose another date or time.`,
+      );
+    }
+
+    const frequencyLabel = sub.frequency === "monthly" ? "Monthly" : "Biweekly";
     const body = new URLSearchParams({
-      mode: "setup",
+      mode: "subscription",
       customer: stripeCustomerId,
       "payment_method_types[0]": "card",
+      "line_items[0][quantity]": "1",
+      "line_items[0][price_data][currency]": "usd",
+      "line_items[0][price_data][unit_amount]": Math.round(
+        sub.totalPrice * 100,
+      ).toString(),
+      "line_items[0][price_data][product_data][name]":
+        "River City MD Subscription",
+      "line_items[0][price_data][product_data][description]": `${serviceNames.join(", ") || "Recurring detailing"} — ${frequencyLabel}`,
       "metadata[subscriptionId]": args.subscriptionId,
+      "subscription_data[metadata][subscriptionId]": args.subscriptionId,
       success_url: `${appUrl}/dashboard/subscriptions?success=true`,
       cancel_url: `${appUrl}/dashboard/subscriptions?cancelled=true`,
     });
+    if (sub.frequency === "monthly") {
+      body.set("line_items[0][price_data][recurring][interval]", "month");
+    } else {
+      body.set("line_items[0][price_data][recurring][interval]", "week");
+      body.set(
+        "line_items[0][price_data][recurring][interval_count]",
+        "2",
+      );
+    }
 
     const response = await fetch(
       "https://api.stripe.com/v1/checkout/sessions",
@@ -708,6 +894,9 @@ export const startCheckout = action({
     if (sub.status !== "pending_payment") {
       throw new Error("This subscription no longer needs payment");
     }
+    if (!sub.startDate) {
+      throw new Error("Choose your service date and time first");
+    }
     return await ctx.runAction(internal.subscriptions.createCheckoutSession, {
       subscriptionId: args.subscriptionId,
     });
@@ -807,7 +996,32 @@ export const createNextAppointment = internalAction({
       }
     }
 
-    // Create appointment
+    // Idempotency: skip if an appointment for this cycle already exists
+    // (duplicate webhook deliveries would otherwise double-book).
+    const existingForCycle = await ctx.runQuery(
+      internal.subscriptions.findAppointmentForSubscriptionDate,
+      {
+        subscriptionId: args.subscriptionId,
+        scheduledDate: nextDate,
+      },
+    );
+    if (existingForCycle) return;
+
+    // Re-check the slot at booking time; the customer may have paid from an
+    // emailed link hours or days after choosing the slot.
+    const availability = await ctx.runQuery(
+      api.availability.checkAvailability,
+      {
+        date: nextDate,
+        startTime: sub.preferredTime,
+        duration: totalDuration,
+        ignoreAppointmentId: sub.lastAppointmentId ?? undefined,
+      },
+    );
+    const slotAvailable = availability.available;
+
+    // Create appointment. A slot conflict keeps it visible in the admin
+    // booking list as pending so it can be rescheduled there.
     const appointmentId = await ctx.runMutation(
       internal.subscriptions.insertAppointment,
       {
@@ -820,8 +1034,13 @@ export const createNextAppointment = internalAction({
         location: sub.location,
         totalPrice: sub.totalPrice,
         subscriptionId: args.subscriptionId,
-        notes: sub.notes ? `[Subscription] ${sub.notes}` : "[Subscription] Auto-scheduled",
+        notes: slotAvailable
+          ? sub.notes
+            ? `[Subscription] ${sub.notes}`
+            : "[Subscription] Auto-scheduled"
+          : "[Subscription] Chosen time conflicts with another booking — needs rescheduling",
         createdBy: sub.createdBy,
+        status: slotAvailable ? "confirmed" : "pending",
       },
     );
 
@@ -904,6 +1123,7 @@ export const insertAppointment = internalMutation({
     subscriptionId: v.id("subscriptions"),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
+    status: v.optional(v.union(v.literal("pending"), v.literal("confirmed"))),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("appointments", {
@@ -914,7 +1134,7 @@ export const insertAppointment = internalMutation({
       scheduledTime: args.scheduledTime,
       duration: args.duration,
       location: args.location,
-      status: "confirmed",
+      status: args.status ?? "confirmed",
       totalPrice: args.totalPrice,
       paymentOption: "subscription",
       subscriptionId: args.subscriptionId,

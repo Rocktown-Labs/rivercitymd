@@ -198,7 +198,18 @@ registerRoutes(http, components.stripe, {
       ctx,
       event: Stripe.CheckoutSessionAsyncPaymentSucceededEvent,
     ) => {
-      await fulfillBookingDraftCheckout(ctx, event, event.data.object);
+      const session = event.data.object;
+      if (session.mode === "subscription" && session.metadata?.subscriptionId) {
+        const subscriptionId = session.metadata.subscriptionId as Id<"subscriptions">;
+        const stripeSubscriptionId = session.subscription as string;
+        await ctx.runAction(internal.subscriptions.handleCheckoutCompleted, {
+          subscriptionId,
+          stripeSubscriptionId,
+          paymentStatus: "paid",
+        });
+        return;
+      }
+      await fulfillBookingDraftCheckout(ctx, event, session);
     },
 
     // Handle deposit payment completion
@@ -222,12 +233,10 @@ registerRoutes(http, components.stripe, {
       if (session.mode === "subscription" && session.metadata?.subscriptionId) {
         const subscriptionId = session.metadata.subscriptionId as Id<"subscriptions">;
         const stripeSubscriptionId = session.subscription as string;
-        await ctx.runMutation(internal.subscriptions.activate, {
+        await ctx.runAction(internal.subscriptions.handleCheckoutCompleted, {
           subscriptionId,
           stripeSubscriptionId,
-        });
-        await ctx.scheduler.runAfter(0, internal.subscriptions.createNextAppointment, {
-          subscriptionId,
+          paymentStatus: session.payment_status,
         });
         return;
       }
@@ -615,8 +624,13 @@ registerRoutes(http, components.stripe, {
       const stripeInvoice = event.data.object;
 
       // --- Handle subscription renewal invoices ---
+      // The first subscription invoice (billing_reason "subscription_create")
+      // is handled by checkout.session.completed; only cycle invoices book
+      // the next appointment.
       const stripeSubId = (stripeInvoice as any).subscription as string | null;
-      if (stripeSubId) {
+      const subscriptionBillingReason = (stripeInvoice as any)
+        .billing_reason as string | undefined;
+      if (stripeSubId && subscriptionBillingReason !== "subscription_create") {
         const ourSub = await ctx.runQuery(
           internal.subscriptions.getByStripeSubscriptionId,
           { stripeSubscriptionId: stripeSubId },
@@ -626,8 +640,9 @@ registerRoutes(http, components.stripe, {
           console.log(
             `[stripe-webhook] subscription renewal invoice.paid subscriptionId=${ourSub._id}`,
           );
-          await ctx.scheduler.runAfter(0, internal.subscriptions.createNextAppointment, {
+          await ctx.scheduler.runAfter(0, internal.subscriptions.handleRenewalInvoicePaid, {
             subscriptionId: ourSub._id,
+            stripeInvoiceId: stripeInvoice.id,
           });
           return;
         }

@@ -26,6 +26,8 @@ type SubscriptionCard = {
   totalPrice: number;
   nextScheduledDate?: string;
   startDate?: string;
+  preferredTime: string;
+  estimatedDurationMinutes?: number;
 };
 
 function statusVariant(status: string) {
@@ -61,6 +63,108 @@ function formatCurrency(amount: number) {
     style: "currency",
     currency: "USD",
   }).format(amount);
+}
+
+function PendingPaymentControls({
+  sub,
+  isLoading,
+  onSlotChange,
+  onPay,
+  onDecline,
+}: {
+  sub: SubscriptionCard;
+  isLoading: boolean;
+  onSlotChange: (
+    subscriptionId: Id<"subscriptions">,
+    startDate: string,
+    preferredTime?: string,
+  ) => Promise<void>;
+  onPay: (subscriptionId: Id<"subscriptions">) => Promise<void>;
+  onDecline: (subscriptionId: Id<"subscriptions">) => Promise<void>;
+}) {
+  const serviceDate = sub.startDate;
+  const slots = useQuery(
+    api.availability.getAvailableTimeSlots,
+    serviceDate
+      ? {
+          date: serviceDate,
+          serviceDuration: sub.estimatedDurationMinutes || 60,
+        }
+      : "skip",
+  ) as
+    | { time: string; displayTime: string; available: boolean; reason?: string }[]
+    | undefined;
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <p className="text-sm text-muted-foreground">
+        You&apos;ll be charged {formatCurrency(sub.totalPrice)} today when you
+        pay, then every {sub.frequency === "monthly" ? "month" : "2 weeks"}.
+        Your first service is scheduled for the date and time you pick below.
+      </p>
+      <label className="block max-w-xs space-y-1 text-sm">
+        <span className="text-muted-foreground">Service date</span>
+        <input
+          className="h-9 w-full rounded-md border bg-background px-3"
+          type="date"
+          value={serviceDate || ""}
+          min={new Date().toISOString().slice(0, 10)}
+          disabled={isLoading}
+          onChange={(event) =>
+            void onSlotChange(sub._id, event.target.value)
+          }
+        />
+      </label>
+      {serviceDate && (
+        <div className="space-y-2">
+          <span className="text-sm text-muted-foreground">Available times</span>
+          {slots === undefined ? (
+            <p className="text-sm text-muted-foreground">
+              Checking availability…
+            </p>
+          ) : slots.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No open times for this date — try another day.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {slots.map((slot) => (
+                <Button
+                  key={slot.time}
+                  type="button"
+                  size="sm"
+                  variant={sub.preferredTime === slot.time ? "default" : "outline"}
+                  disabled={isLoading || !slot.available}
+                  title={slot.available ? undefined : slot.reason || "Unavailable"}
+                  onClick={() => void onSlotChange(sub._id, serviceDate, slot.time)}
+                >
+                  {slot.displayTime}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          onClick={() => void onPay(sub._id)}
+          disabled={isLoading || !serviceDate}
+        >
+          <CreditCard className="mr-2 h-4 w-4" />
+          Pay &amp; Start Subscription
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void onDecline(sub._id)}
+          disabled={isLoading}
+        >
+          Decline Subscription
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export default function SubscriptionsClient() {
@@ -113,11 +217,14 @@ export default function SubscriptionsClient() {
   const handleStartDateChange = async (
     subscriptionId: Id<"subscriptions">,
     startDate: string,
+    preferredTime?: string,
   ) => {
     setIsLoading(true);
     try {
-      await updateStartDate({ subscriptionId, startDate });
-      toast.success("Start date updated");
+      await updateStartDate({ subscriptionId, startDate, preferredTime });
+      toast.success(
+        preferredTime ? "Service time updated" : "Start date updated",
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update start date");
     } finally {
@@ -209,40 +316,23 @@ export default function SubscriptionsClient() {
                 )}
               </div>
 
-              {sub.startDate && (
+              {sub.startDate && sub.status !== "pending_payment" && (
                 <p className="text-sm text-muted-foreground">
-                  Starts and bills on <span className="font-medium text-foreground">{sub.startDate}</span>
+                  First service on <span className="font-medium text-foreground">{sub.startDate}</span>
                 </p>
               )}
 
               {sub.status === "pending_payment" && (
-                <label className="block max-w-xs space-y-1 text-sm">
-                  <span className="text-muted-foreground">Choose your service and billing start date</span>
-                  <input
-                    className="h-9 w-full rounded-md border bg-background px-3"
-                    type="date"
-                    value={sub.startDate || ""}
-                    min={new Date().toISOString().slice(0, 10)}
-                    disabled={isLoading}
-                    onChange={(event) =>
-                      void handleStartDateChange(sub._id, event.target.value)
-                    }
-                  />
-                </label>
+                <PendingPaymentControls
+                  sub={sub}
+                  isLoading={isLoading}
+                  onSlotChange={handleStartDateChange}
+                  onPay={handlePay}
+                  onDecline={handleCancel}
+                />
               )}
 
               <div className="flex flex-wrap gap-2 pt-2">
-                {sub.status === "pending_payment" && (
-                  <>
-                    <Button size="sm" onClick={() => handlePay(sub._id)} disabled={isLoading}>
-                      <CreditCard className="mr-2 h-4 w-4" />
-                      Add Card &amp; Pay
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
-                      Decline Subscription
-                    </Button>
-                  </>
-                )}
                 {(sub.status === "active" || sub.status === "past_due" || sub.status === "paused") && (
                   <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
                     Cancel Subscription

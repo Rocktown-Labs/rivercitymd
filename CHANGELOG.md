@@ -5,6 +5,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 ## [Unreleased]
 ### Added
 - **Subscription Payment Lifecycle**: Added start-date billing anchors, reusable customer checkout, customer pay/decline/cancel actions, and an inline admin flow for creating a new customer before issuing a subscription.
+- **Subscription Pay-at-Checkout**: Charge the first subscription payment immediately on a full payment-style Stripe Checkout (product, amount, business name), bill recurring cycles from the payment date, and let the admin or customer pick the availability-validated service date and time that books the first appointment (conflicts land in the admin booking list as pending for rescheduling).
 
 ### Fixed
 - **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
@@ -13,6 +14,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Vercel Build Configuration**: Move the conditional deployment logic into the web package script to stay within Vercel's `buildCommand` length limit.
 - **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
 - **SEO Route Access**: Serve `/robots.txt` and `/sitemap.xml` to unauthenticated visitors so search engines can fetch crawl metadata instead of hitting the Clerk sign-in redirect.
+- **Subscription First-Invoice Webhook Race**: Ignore the first subscription invoice (`subscription_create`) in the renewal handler, dedupe completed checkout deliveries, and skip already-booked cycles so the first appointment cannot be double-booked.
 
 ### Changed
 - **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).

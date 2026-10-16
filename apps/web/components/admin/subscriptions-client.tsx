@@ -450,6 +450,7 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
     () => new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
   );
   const [preferredTime, setPreferredTime] = useState("09:00");
+  const [letCustomerChooseDate, setLetCustomerChooseDate] = useState(false);
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
@@ -501,8 +502,9 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
         vehicleIds: selectedVehicleIds as Id<"vehicles">[],
         frequency,
         preferredDayOfWeek: parseInt(preferredDay),
-        startDate,
+        startDate: letCustomerChooseDate ? undefined : startDate,
         preferredTime,
+        letCustomerChooseDate: letCustomerChooseDate || undefined,
         location: { street, city, state, zip },
         notes: notes || undefined,
       });
@@ -681,29 +683,51 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
         </div>
       </div>
 
-      {/* Time */}
+      {/* Service date & time */}
       <div className="space-y-2">
-        <Label>Service start and billing date</Label>
-        <Input
-          type="date"
-          value={startDate}
-          min={new Date().toISOString().slice(0, 10)}
-          onChange={(e) => setStartDate(e.target.value)}
-        />
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={letCustomerChooseDate}
+            onChange={(e) => setLetCustomerChooseDate(e.target.checked)}
+          />
+          Let the customer choose their service date &amp; time at payment
+        </label>
         <p className="text-xs text-muted-foreground">
-          The customer&apos;s first service and recurring billing anchor date.
+          The customer is charged the day they pay and recurring billing runs
+          from that payment date. The chosen date &amp; time only schedules the
+          first service appointment.
         </p>
       </div>
 
-      {/* Time */}
-      <div className="space-y-2">
-        <Label>Preferred Time</Label>
-        <Input
-          type="time"
-          value={preferredTime}
-          onChange={(e) => setPreferredTime(e.target.value)}
-        />
-      </div>
+      {!letCustomerChooseDate && (
+        <>
+          <div className="space-y-2">
+            <Label>First service date</Label>
+            <Input
+              type="date"
+              value={startDate}
+              min={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The customer can still adjust this in their dashboard before paying.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Preferred Time</Label>
+            <Input
+              type="time"
+              value={preferredTime}
+              onChange={(e) => setPreferredTime(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              The time slot is validated against availability at payment.
+            </p>
+          </div>
+        </>
+      )}
 
       {/* Location */}
       <div className="space-y-2">
