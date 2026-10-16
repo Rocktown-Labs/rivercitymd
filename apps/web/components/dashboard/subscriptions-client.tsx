@@ -135,21 +135,20 @@ function PendingPaymentControls({
   };
 
   return (
-    <div className="space-y-4 rounded-md border p-3">
-      <p className="text-sm text-muted-foreground">
-        You&apos;ll be charged {formatCurrency(sub.totalPrice)} today when you
-        pay, then every {sub.frequency === "monthly" ? "month" : "2 weeks"}.
-        Your recurring service runs on the date and time you pick below —
-        we&apos;ll keep your next visit pre-scheduled and it confirms with each
-        payment.
+    <div className="space-y-2.5 border-t pt-3">
+      <p className="text-xs text-muted-foreground">
+        Charged {formatCurrency(sub.totalPrice)} today, then every{" "}
+        {sub.frequency === "monthly" ? "month" : "2 weeks"}. Pick your service
+        date, time, and address below — your next visit stays pre-scheduled and
+        confirms with each payment.
       </p>
 
-      <div className="max-w-xs space-y-4">
-        <label className="block space-y-1 text-sm">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block space-y-1 text-xs">
           <span className="text-muted-foreground">Service date</span>
           <Input
             type="date"
-            className="bg-background border-border text-foreground"
+            className="h-9 bg-background border-border text-foreground"
             value={serviceDate || ""}
             min={new Date().toISOString().slice(0, 10)}
             disabled={isLoading}
@@ -161,7 +160,7 @@ function PendingPaymentControls({
             }
           />
         </label>
-        <div className="block space-y-1 text-sm">
+        <div className="block space-y-1 text-xs">
           <span className="text-muted-foreground">Service time</span>
           <TimeSlotPicker
             date={serviceDate || ""}
@@ -177,15 +176,15 @@ function PendingPaymentControls({
         </div>
       </div>
 
-      <div className="space-y-2">
+      <div className="max-w-sm space-y-1">
         <AddressInput
           onAddressSelect={handleAddressSelect}
           onAutocompleteAvailabilityChange={setAddressSearchAvailable}
           label="Service Address"
           placeholder="Search for your service address"
         />
-        <p className="text-sm text-muted-foreground">
-          Current service address:{" "}
+        <p className="text-xs text-muted-foreground">
+          Current:{" "}
           <span className="font-medium text-foreground">
             {sub.location
               ? `${sub.location.street}, ${sub.location.city}, ${sub.location.state} ${sub.location.zip}`
@@ -392,40 +391,40 @@ export default function SubscriptionsClient() {
         </Button>
       </div>
 
-      <div className="space-y-4">
+      <div className="grid items-start gap-4 md:grid-cols-2">
         {subscriptions.map((sub) => (
-          <Card key={sub._id}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-lg">
+          <Card key={sub._id} className="gap-3 py-4">
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 px-4">
+              <CardTitle className="text-sm font-semibold leading-snug">
                 {sub.serviceNames.join(", ")}
               </CardTitle>
               <Badge variant={statusVariant(sub.status)}>
                 {statusLabel(sub.status)}
               </Badge>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid grid-cols-2 gap-4 text-sm">
+            <CardContent className="space-y-2 px-4">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                 <div>
                   <p className="text-muted-foreground">Frequency</p>
-                  <p className="font-medium capitalize">{sub.frequency}</p>
+                  <p className="text-sm font-medium capitalize">{sub.frequency}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Price</p>
-                  <p className="font-medium">
+                  <p className="text-sm font-medium">
                     {formatCurrency(sub.totalPrice)} /{" "}
                     {sub.frequency === "monthly" ? "month" : "2 weeks"}
                   </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Vehicles</p>
-                  <p className="font-medium">
+                  <p className="text-sm font-medium">
                     {sub.vehicleNames.join(", ")}
                   </p>
                 </div>
                 {sub.nextScheduledDate && (
                   <div>
                     <p className="text-muted-foreground">Next Appointment</p>
-                    <p className="font-medium flex items-center gap-1">
+                    <p className="text-sm font-medium flex items-center gap-1">
                       <Calendar className="h-3.5 w-3.5" />
                       {sub.nextScheduledDate}
                     </p>
@@ -434,7 +433,7 @@ export default function SubscriptionsClient() {
               </div>
 
               {sub.startDate && sub.status !== "pending_payment" && (
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground">
                   First service on <span className="font-medium text-foreground">{sub.startDate}</span>
                 </p>
               )}
@@ -449,7 +448,7 @@ export default function SubscriptionsClient() {
                 />
               )}
 
-              <div className="flex flex-wrap gap-2 pt-2">
+              <div className="flex flex-wrap gap-2">
                 {(sub.status === "active" || sub.status === "past_due" || sub.status === "paused") && (
                   <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
                     Cancel Subscription

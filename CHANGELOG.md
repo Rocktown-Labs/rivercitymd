@@ -16,6 +16,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Billing Date**: Save the customer's card without a trial, then charge and schedule service on the selected start date.
 - **SEO Route Access**: Serve `/robots.txt` and `/sitemap.xml` to unauthenticated visitors so search engines can fetch crawl metadata instead of hitting the Clerk sign-in redirect.
 - **Subscription First-Invoice Webhook Race**: Ignore the first subscription invoice (`subscription_create`) in the renewal handler, dedupe completed checkout deliveries, and skip already-booked cycles so the first appointment cannot be double-booked.
+- **Subscription Card Layout**: Compact the dashboard subscription cards into a side-by-side grid with side-by-side date and time pickers and a slim address bar, for both pending-payment and active subscriptions.
 
 ### Changed
 - **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).
