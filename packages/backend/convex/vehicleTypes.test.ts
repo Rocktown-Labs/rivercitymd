@@ -44,7 +44,54 @@ describe("vehicleTypes", () => {
       "SUV",
       "Van",
       "Motorcycle",
+      "Semi",
     ]);
+  });
+
+  test("classifies heavy truck makes as Semi without external lookups", async () => {
+    const t = convexTest(schema, modules);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await t.action(api.vehicleTypes.classify, {
+      year: 2018,
+      make: "Freightliner",
+      model: "Cascadia",
+    });
+
+    expect(result.vehicleTypeName).toBe("Semi");
+    expect(result.legacySize).toBe("large");
+    expect(result.source).toBe("fallback");
+    expect(result.confidence).toBe("high");
+    expect(result.needsAdminReview).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test("does not classify a Freightliner Sprinter as Semi", async () => {
+    const t = convexTest(schema, modules);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const urlString = String(url);
+        if (urlString.includes("/menu/options")) {
+          return Response.json({ menuItem: { value: "12345" } });
+        }
+        if (urlString.includes("/ws/rest/vehicle/12345")) {
+          return Response.json({ VClass: "Van" });
+        }
+        return Response.json({}, { status: 404 });
+      }),
+    );
+
+    const result = await t.action(api.vehicleTypes.classify, {
+      year: 2018,
+      make: "Freightliner",
+      model: "Sprinter",
+    });
+
+    expect(result.vehicleTypeName).toBe("Van");
+    expect(result.legacySize).toBe("large");
   });
 
   test("classifies minivans from FuelEconomy as Van", async () => {
