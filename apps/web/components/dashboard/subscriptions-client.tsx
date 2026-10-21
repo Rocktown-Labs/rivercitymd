@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AddressInput from "@/components/ui/address-input";
 import { TimeSlotPicker } from "@/components/home/time-slot-picker";
 import { toast } from "sonner";
@@ -348,6 +349,88 @@ export default function SubscriptionsClient() {
     }
   };
 
+  const renderSubscriptionCards = (items: SubscriptionCard[]) => (
+    <div className="grid items-start gap-4 md:grid-cols-2">
+      {items.map((sub) => (
+        <Card key={sub._id} className="gap-3 py-4">
+          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 px-4">
+            <CardTitle className="text-sm font-semibold leading-snug">
+              {sub.serviceNames.join(", ")}
+            </CardTitle>
+            <Badge variant={statusVariant(sub.status)}>
+              {statusLabel(sub.status)}
+            </Badge>
+          </CardHeader>
+          <CardContent className="space-y-2 px-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              <div>
+                <p className="text-muted-foreground">Frequency</p>
+                <p className="text-sm font-medium capitalize">{sub.frequency}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Price</p>
+                <p className="text-sm font-medium">
+                  {formatCurrency(sub.totalPrice)} /{" "}
+                  {sub.frequency === "monthly" ? "month" : "2 weeks"}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Vehicles</p>
+                <p className="text-sm font-medium">
+                  {sub.vehicleNames.join(", ")}
+                </p>
+              </div>
+              {sub.nextScheduledDate && (
+                <div>
+                  <p className="text-muted-foreground">Next Appointment</p>
+                  <p className="text-sm font-medium flex items-center gap-1">
+                    <Calendar className="h-3.5 w-3.5" />
+                    {sub.nextScheduledDate}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {sub.startDate && sub.status !== "pending_payment" && (
+              <p className="text-xs text-muted-foreground">
+                First service on <span className="font-medium text-foreground">{sub.startDate}</span>
+              </p>
+            )}
+
+            {sub.status === "pending_payment" && (
+              <PendingPaymentControls
+                sub={sub}
+                isLoading={isLoading}
+                onPreferencesChange={handlePreferencesChange}
+                onPay={handlePay}
+                onDecline={handleCancel}
+              />
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              {(sub.status === "active" || sub.status === "past_due" || sub.status === "paused") && (
+                <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
+                  Cancel Subscription
+                </Button>
+              )}
+            </div>
+
+            {sub.status === "active" && sub.nextScheduledDate && (
+              <div className="pt-2">
+                <Link href="/dashboard/appointments">
+                  <Button variant="outline" size="sm">
+                    <Calendar className="mr-2 h-4 w-4" />
+                    View Upcoming Appointments
+                  </Button>
+                </Link>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+
   if (subscriptions === undefined) {
     return (
       <div className="space-y-6">
@@ -377,6 +460,23 @@ export default function SubscriptionsClient() {
     );
   }
 
+  const renderEmptyState = (title: string, description: string) => (
+    <Card className="py-10 text-center">
+      <CardContent>
+        <RefreshCw className="mx-auto mb-4 h-10 w-10 text-muted-foreground" />
+        <h3 className="mb-1 text-base font-semibold">{title}</h3>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </CardContent>
+    </Card>
+  );
+
+  const cancelledSubscriptions = subscriptions.filter(
+    (sub) => sub.status === "cancelled",
+  );
+  const openSubscriptions = subscriptions.filter(
+    (sub) => sub.status !== "cancelled",
+  );
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -391,85 +491,41 @@ export default function SubscriptionsClient() {
         </Button>
       </div>
 
-      <div className="grid items-start gap-4 md:grid-cols-2">
-        {subscriptions.map((sub) => (
-          <Card key={sub._id} className="gap-3 py-4">
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 px-4">
-              <CardTitle className="text-sm font-semibold leading-snug">
-                {sub.serviceNames.join(", ")}
-              </CardTitle>
-              <Badge variant={statusVariant(sub.status)}>
-                {statusLabel(sub.status)}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-2 px-4">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <div>
-                  <p className="text-muted-foreground">Frequency</p>
-                  <p className="text-sm font-medium capitalize">{sub.frequency}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Price</p>
-                  <p className="text-sm font-medium">
-                    {formatCurrency(sub.totalPrice)} /{" "}
-                    {sub.frequency === "monthly" ? "month" : "2 weeks"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Vehicles</p>
-                  <p className="text-sm font-medium">
-                    {sub.vehicleNames.join(", ")}
-                  </p>
-                </div>
-                {sub.nextScheduledDate && (
-                  <div>
-                    <p className="text-muted-foreground">Next Appointment</p>
-                    <p className="text-sm font-medium flex items-center gap-1">
-                      <Calendar className="h-3.5 w-3.5" />
-                      {sub.nextScheduledDate}
-                    </p>
-                  </div>
-                )}
-              </div>
+      <Tabs defaultValue="all" className="w-full">
+        <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsTrigger value="all">
+            All ({subscriptions.length})
+          </TabsTrigger>
+          <TabsTrigger value="active">
+            Active ({openSubscriptions.length})
+          </TabsTrigger>
+          <TabsTrigger value="cancelled">
+            Cancelled ({cancelledSubscriptions.length})
+          </TabsTrigger>
+        </TabsList>
 
-              {sub.startDate && sub.status !== "pending_payment" && (
-                <p className="text-xs text-muted-foreground">
-                  First service on <span className="font-medium text-foreground">{sub.startDate}</span>
-                </p>
+        <TabsContent value="all" className="mt-6">
+          {renderSubscriptionCards(subscriptions)}
+        </TabsContent>
+
+        <TabsContent value="active" className="mt-6">
+          {openSubscriptions.length > 0
+            ? renderSubscriptionCards(openSubscriptions)
+            : renderEmptyState(
+                "No active subscriptions",
+                "You don't have any active subscriptions right now.",
               )}
+        </TabsContent>
 
-              {sub.status === "pending_payment" && (
-                <PendingPaymentControls
-                  sub={sub}
-                  isLoading={isLoading}
-                  onPreferencesChange={handlePreferencesChange}
-                  onPay={handlePay}
-                  onDecline={handleCancel}
-                />
+        <TabsContent value="cancelled" className="mt-6">
+          {cancelledSubscriptions.length > 0
+            ? renderSubscriptionCards(cancelledSubscriptions)
+            : renderEmptyState(
+                "No cancelled subscriptions",
+                "Subscriptions you cancel will appear here.",
               )}
-
-              <div className="flex flex-wrap gap-2">
-                {(sub.status === "active" || sub.status === "past_due" || sub.status === "paused") && (
-                  <Button size="sm" variant="outline" onClick={() => handleCancel(sub._id)} disabled={isLoading}>
-                    Cancel Subscription
-                  </Button>
-                )}
-              </div>
-
-              {sub.status === "active" && sub.nextScheduledDate && (
-                <div className="pt-2">
-                  <Link href="/dashboard/appointments">
-                    <Button variant="outline" size="sm">
-                      <Calendar className="mr-2 h-4 w-4" />
-                      View Upcoming Appointments
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
