@@ -135,6 +135,42 @@ describe("vehicle-aware service pricing", () => {
     ).toEqual({ price: 145, duration: 95, isAvailable: true });
   });
 
+  test("falls back to legacy size for a custom vehicle type without an exact row", () => {
+    const service = {
+      isActive: true,
+      duration: 60,
+      vehiclePrices: [
+        {
+          vehicleTypeId: "truck",
+          price: 200,
+          duration: 90,
+          isAvailable: true,
+          vehicleType: { legacySize: "large" as const },
+        },
+        {
+          vehicleTypeId: "semi",
+          price: 500,
+          duration: 240,
+          isAvailable: true,
+          vehicleType: { legacySize: "large" as const },
+        },
+      ],
+    };
+
+    expect(
+      getEffectiveServicePricingForVehicle(service, {
+        vehicleSize: "large",
+        vehicleTypeId: "freightliner",
+      }),
+    ).toEqual({ price: 200, duration: 90, isAvailable: true });
+    expect(
+      getEffectiveServicePricingForVehicle(service, {
+        vehicleSize: "large",
+        vehicleTypeId: "semi",
+      }),
+    ).toEqual({ price: 500, duration: 240, isAvailable: true });
+  });
+
   test("falls back to legacy price fields when no vehicle rows exist", () => {
     const service = {
       isActive: true,

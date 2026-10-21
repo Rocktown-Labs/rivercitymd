@@ -48,7 +48,62 @@ const DEFAULT_VEHICLE_TYPES = [
     displayOrder: 50,
     apiAliases: ["motorcycle", "scooter"],
   },
+  {
+    name: "Semi",
+    slug: "semi",
+    legacySize: "large" as VehicleSize,
+    displayOrder: 110,
+    apiAliases: [
+      "semi",
+      "semi truck",
+      "semi-truck",
+      "heavy truck",
+      "tractor trailer",
+      "freightliner",
+      "kenworth",
+      "peterbilt",
+      "mack",
+      "western star",
+      "international",
+      "hino",
+      "scania",
+    ],
+  },
 ];
+
+const HEAVY_TRUCK_MAKES = [
+  "freightliner",
+  "kenworth",
+  "peterbilt",
+  "mack",
+  "western star",
+  "international",
+  "hino",
+  "scania",
+] as const;
+
+const LIGHT_TRUCK_MODELS = [
+  "sprinter",
+  "metris",
+  "promaster",
+  "pro master",
+  "transit",
+] as const;
+
+function isHeavyTruckVehicle(make: string, model: string) {
+  const normalizedMake = make.trim().toLowerCase();
+  const normalizedModel = model.trim().toLowerCase();
+  if (
+    LIGHT_TRUCK_MODELS.some((candidate) =>
+      normalizedModel.includes(candidate),
+    )
+  ) {
+    return false;
+  }
+  return HEAVY_TRUCK_MAKES.some((candidate) =>
+    normalizedMake.includes(candidate),
+  );
+}
 
 function slugify(value: string) {
   return value
@@ -66,7 +121,10 @@ function inferLegacySize(name: string): VehicleSize {
   if (
     normalized.includes("truck") ||
     normalized.includes("van") ||
-    normalized.includes("suv")
+    normalized.includes("suv") ||
+    normalized.includes("semi") ||
+    normalized.includes("heavy") ||
+    normalized.includes("tractor")
   ) {
     return "large";
   }
@@ -245,6 +303,14 @@ function mapCategoryToSlug(value: string | undefined): {
   if (normalized.includes("minivan") || normalized.includes("van")) {
     return { slug: "van", confidence: "high" };
   }
+  if (
+    normalized.includes("semi") ||
+    normalized.includes("tractor trailer") ||
+    normalized.includes("heavy truck") ||
+    normalized.includes("heavy duty truck")
+  ) {
+    return { slug: "semi", confidence: "high" };
+  }
   if (normalized.includes("pickup") || normalized.includes("truck")) {
     return { slug: "truck", confidence: "high" };
   }
@@ -323,7 +389,8 @@ async function classifyWithGeminiSearch(args: {
                 text:
                   "Use Google Search if needed. Classify this vehicle for a mobile detailing pricing engine. " +
                   "Return only compact JSON with keys slug, confidence, rawCategory. " +
-                  "slug must be one of car, truck, suv, van, motorcycle, side-by-side. " +
+                  "slug must be one of car, truck, suv, van, motorcycle, side-by-side, semi. " +
+                  "Use semi for heavy-duty semi trucks and tractor-trailers such as Freightliner Cascadia, Kenworth T680, and Peterbilt 579. " +
                   "Use side-by-side for ATVs, UTVs, side-by-sides, Can-Am Defender/Maverick, Polaris RZR/Ranger, and similar off-road utility vehicles. " +
                   "Use motorcycle for motorcycles, scooters, trikes, Can-Am Spyder/Ryker, and road-going three-wheel motorcycles. " +
                   "Use van for RVs/motorhomes/campers if no better category exists. " +
@@ -372,7 +439,7 @@ async function classifyWithGeminiSearch(args: {
 
   return {
     slug:
-      ["car", "truck", "suv", "van", "motorcycle", "side-by-side"].includes(parsed?.slug)
+      ["car", "truck", "suv", "van", "motorcycle", "side-by-side", "semi"].includes(parsed?.slug)
         ? parsed.slug
         : mapped.slug,
     confidence,
@@ -593,6 +660,22 @@ export const classify = action({
     });
 
     await ctx.runMutation(internal.vehicleTypes.ensureDefaultsInternal, {});
+
+    if (isHeavyTruckVehicle(args.make, args.model)) {
+      const semiType = await ctx.runQuery(
+        internal.vehicleTypes.getBySlugInternal,
+        { slug: "semi" },
+      );
+      return {
+        vehicleTypeId: semiType?._id,
+        vehicleTypeName: semiType?.name,
+        legacySize: semiType?.legacySize ?? "large",
+        source: "fallback",
+        confidence: "high",
+        rawCategory: `Heavy truck make: ${args.make.trim()}`,
+        needsAdminReview: !semiType,
+      };
+    }
 
     const make = encodeURIComponent(args.make.trim());
     const model = encodeURIComponent(args.model.trim());
