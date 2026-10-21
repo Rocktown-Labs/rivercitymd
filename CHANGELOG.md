@@ -11,6 +11,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Semi Pricing Exclusivity**: Require an exact Semi price row for typed vehicles so Semi no longer inherits every Truck-priced service; legacy-size fallback remains only for vehicles without a vehicle type.
 - **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
 - **Vercel Monorepo Build**: Resolve the backend path from either the repository root or the web project root so both Vercel projects can run the Convex deployment build.
 - **Vercel Project Compatibility**: Run the Convex deployment only in projects with `CONVEX_DEPLOY_KEY`; build the separate web project against its configured Convex URL.

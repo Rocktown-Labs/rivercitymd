@@ -205,9 +205,11 @@ export function getEffectiveServicePricingForVehicle(
     const exactRow = vehicle.vehicleTypeId
       ? rows.find((row) => row.vehicleTypeId === vehicle.vehicleTypeId)
       : undefined;
-    const legacyRow = rows.find(
-      (row) => row.vehicleType?.legacySize === vehicle.vehicleSize,
-    );
+    const legacyRow = !vehicle.vehicleTypeId
+      ? rows.find(
+          (row) => row.vehicleType?.legacySize === vehicle.vehicleSize,
+        )
+      : undefined;
     const row = exactRow ?? legacyRow;
 
     if (!row) {
