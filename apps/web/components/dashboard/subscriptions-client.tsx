@@ -144,7 +144,7 @@ function PendingPaymentControls({
         confirms with each payment.
       </p>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3">
         <label className="block space-y-1 text-xs">
           <span className="text-muted-foreground">Service date</span>
           <Input
@@ -350,7 +350,7 @@ export default function SubscriptionsClient() {
   };
 
   const renderSubscriptionCards = (items: SubscriptionCard[]) => (
-    <div className="grid items-start gap-4 md:grid-cols-2">
+    <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
       {items.map((sub) => (
         <Card key={sub._id} className="gap-3 py-4">
           <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 px-4">
