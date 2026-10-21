@@ -135,7 +135,7 @@ describe("vehicle-aware service pricing", () => {
     ).toEqual({ price: 145, duration: 95, isAvailable: true });
   });
 
-  test("falls back to legacy size for a custom vehicle type without an exact row", () => {
+  test("does not fall back to legacy size when a custom vehicle type has no exact row", () => {
     const service = {
       isActive: true,
       duration: 60,
@@ -162,7 +162,7 @@ describe("vehicle-aware service pricing", () => {
         vehicleSize: "large",
         vehicleTypeId: "freightliner",
       }),
-    ).toEqual({ price: 200, duration: 90, isAvailable: true });
+    ).toEqual({ price: 0, duration: 60, isAvailable: false });
     expect(
       getEffectiveServicePricingForVehicle(service, {
         vehicleSize: "large",
