@@ -34,7 +34,7 @@ interface StripeInvoiceVehicleInput {
 }
 
 type InvoiceItem = {
-  itemType?: "service" | "pet_fee" | "travel_fee";
+  itemType?: "service" | "subscription" | "pet_fee" | "travel_fee";
   serviceId?: Id<"services">;
   vehicleId?: Id<"vehicles">;
   vehicleLabel?: string;

@@ -120,6 +120,7 @@ type BookingService = {
   bookingRole?: "core" | "upgrade" | "addon";
   isSubscribable?: boolean;
   subscriptionFrequencies?: Array<"monthly" | "biweekly">;
+  includedServiceIds?: Id<"services">[];
   disallowWhenPetHair?: boolean;
   disallowWhenDirtyMud?: boolean;
   isActive: boolean;
@@ -344,6 +345,8 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
 
   const [isLoading, setIsLoading] = useState(false);
   const [paymentOption, setPaymentOption] = useState<"deposit" | "full" | "in_person">("deposit");
+  const [subscriptionSelections, setSubscriptionSelections] = useState<Record<number, boolean>>({});
+  const [subscriptionFrequency, setSubscriptionFrequency] = useState<"monthly" | "biweekly">("monthly");
   const [travelQuote, setTravelQuote] = useState<{
     distanceMiles: number;
     fee: number;
@@ -442,6 +445,131 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     }));
   }, [step3Data?.vehicles]);
 
+  const maintenancePlans = useMemo(
+    () =>
+      (services ?? []).filter(
+        (service) =>
+          service.isActive &&
+          service.serviceType === "subscription" &&
+          (service.includedServiceIds?.length ?? 0) > 0 &&
+          (service.subscriptionFrequencies?.length ?? 0) > 0,
+      ),
+    [services],
+  );
+  const maintenancePlan = maintenancePlans[0] ?? null;
+  const maintenancePlanIncludedServiceIds = useMemo(
+    () => maintenancePlan?.includedServiceIds ?? [],
+    [maintenancePlan],
+  );
+  const maintenanceIncludedServiceNames = maintenancePlanIncludedServiceIds
+    .map((id) => (services ?? []).find((service) => service._id === id)?.name)
+    .filter(Boolean)
+    .join(", ");
+  const availableSubscriptionFrequencies =
+    maintenancePlan?.subscriptionFrequencies ?? [];
+  const effectiveSubscriptionFrequency = availableSubscriptionFrequencies.includes(
+    subscriptionFrequency,
+  )
+    ? subscriptionFrequency
+    : (availableSubscriptionFrequencies[0] ?? "monthly");
+
+  const maintenanceEligibleVehicles = useMemo(() => {
+    if (
+      !maintenancePlan ||
+      maintenancePlanIncludedServiceIds.length === 0
+    ) {
+      return [];
+    }
+    const vehicles = step3Data?.vehicles ?? [];
+    return vehicles
+      .map((vehicle, index) => {
+        const selectedIds =
+          step4Data?.vehicleServices?.[index.toString()] ||
+          step4Data?.serviceIds ||
+          [];
+        const selectedServices = (services ?? []).filter((service) =>
+          selectedIds.includes(service._id),
+        );
+        const hasAllIncluded = maintenancePlanIncludedServiceIds.every((id) =>
+          selectedIds.includes(id),
+        );
+        const hasOtherCoreOrUpgrade = selectedServices.some(
+          (service) =>
+            !maintenancePlanIncludedServiceIds.includes(service._id) &&
+            service.serviceType !== "addon" &&
+            service.bookingRole !== "addon",
+        );
+        const context = {
+          vehicleSize: (vehicle.size ?? "medium") as VehicleSize,
+          vehicleTypeId: vehicle.vehicleTypeId ?? null,
+        };
+        const planPricing = getEffectiveServicePricingForVehicle(
+          maintenancePlan,
+          context,
+        );
+        const includedService = selectedServices.find((service) =>
+          maintenancePlanIncludedServiceIds.includes(service._id),
+        );
+        const includedPricing = includedService
+          ? getEffectiveServicePricingForVehicle(includedService, context)
+          : null;
+        const petFee =
+          vehicle.hasPet && petFeeSettings?.isActive !== false
+            ? vehicle.size === "small"
+              ? petFeeSettings?.basePriceSmall ??
+                petFeeSettings?.basePriceMedium ??
+                50
+              : vehicle.size === "large"
+                ? petFeeSettings?.basePriceLarge ??
+                  petFeeSettings?.basePriceMedium ??
+                  50
+                : petFeeSettings?.basePriceMedium ?? 50
+            : 0;
+        return {
+          index,
+          vehicle,
+          eligible:
+            hasAllIncluded &&
+            !hasOtherCoreOrUpgrade &&
+            planPricing.isAvailable &&
+            planPricing.price > 0,
+          planPrice: planPricing.price,
+          includedPrice: includedPricing?.price ?? 0,
+          savings: Math.max(0, (includedPricing?.price ?? 0) - planPricing.price),
+          petFee,
+          recurringTotal: planPricing.price + petFee,
+        };
+      })
+      .filter((candidate) => candidate.eligible);
+  }, [
+    maintenancePlan,
+    maintenancePlanIncludedServiceIds,
+    step3Data?.vehicles,
+    step4Data,
+    services,
+    petFeeSettings,
+  ]);
+
+  const enrolledMaintenanceVehicles = maintenanceEligibleVehicles.filter(
+    (candidate) => subscriptionSelections[candidate.index],
+  );
+  const maintenanceSelected = enrolledMaintenanceVehicles.length > 0;
+  const maintenanceBasePerCycle = enrolledMaintenanceVehicles.reduce(
+    (sum, candidate) => sum + candidate.planPrice,
+    0,
+  );
+  const maintenancePetPerCycle = enrolledMaintenanceVehicles.reduce(
+    (sum, candidate) => sum + candidate.petFee,
+    0,
+  );
+  const maintenanceTravelPerCycle = maintenanceSelected
+    ? travelQuote?.fee ?? 0
+    : 0;
+  const maintenanceTotalPerCycle =
+    maintenanceBasePerCycle +
+    maintenancePetPerCycle +
+    maintenanceTravelPerCycle;
+
   const checkoutSummary = useMemo(() => {
     const petFeeForSize = (size: "small" | "medium" | "large") => {
       if (petFeeSettings?.isActive === false) return 0;
@@ -471,9 +599,21 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         vehicleSize: (vehicle.size ?? "medium") as VehicleSize,
         vehicleTypeId: vehicle.vehicleTypeId ?? null,
       };
+      const enrolledCandidate = maintenanceEligibleVehicles.find(
+        (candidate) => candidate.index === idx,
+      );
+      const isEnrolled = Boolean(
+        enrolledCandidate && subscriptionSelections[idx],
+      );
 
       const vehicleServices = services?.filter((s) => vServiceIds.includes(s._id)) ?? [];
       vehicleServices.forEach((service) => {
+        if (
+          isEnrolled &&
+          maintenancePlanIncludedServiceIds.includes(service._id)
+        ) {
+          return;
+        }
         const price = getEffectiveServicePricingForVehicle(service, vehicleContext).price;
         serviceTotal += price;
         serviceBreakdownItems.push({
@@ -484,6 +624,18 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           isSubscription: service.serviceType === "subscription",
         });
       });
+
+      if (isEnrolled && enrolledCandidate && maintenancePlan) {
+        serviceTotal += enrolledCandidate.planPrice;
+        serviceBreakdownItems.push({
+          vehicleLabel,
+          serviceName: maintenancePlan.name,
+          serviceDescription:
+            maintenancePlan.description || "Recurring maintenance membership.",
+          price: enrolledCandidate.planPrice,
+          isSubscription: true,
+        });
+      }
     });
 
     const petFeeTotal = vehicles.reduce((sum, vehicle) => {
@@ -493,8 +645,32 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     const travelFeeTotal = travelQuote?.fee ?? 0;
     const orderTotal = serviceTotal + petFeeTotal + travelFeeTotal;
 
-    return { serviceTotal, serviceBreakdownItems, petFeeTotal, travelFeeTotal, orderTotal };
-  }, [step3Data?.vehicles, step4Data, services, petFeeSettings, travelQuote?.fee]);
+    return {
+      serviceTotal,
+      serviceBreakdownItems,
+      petFeeTotal,
+      travelFeeTotal,
+      orderTotal,
+      recurringTotal: maintenanceTotalPerCycle,
+    };
+  }, [
+    step3Data?.vehicles,
+    step4Data,
+    services,
+    petFeeSettings,
+    travelQuote?.fee,
+    maintenanceEligibleVehicles,
+    maintenancePlan,
+    maintenancePlanIncludedServiceIds,
+    maintenanceTotalPerCycle,
+    subscriptionSelections,
+  ]);
+
+  useEffect(() => {
+    if (maintenanceSelected) {
+      setPaymentOption("full");
+    }
+  }, [maintenanceSelected]);
 
   // Live-validate promo codes as the customer types (debounced). The result
   // drives the red/green input feedback and is re-checked whenever the order
@@ -1289,6 +1465,12 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           setCurrentStep(5);
         }
         break;
+      case 5:
+        if (maintenanceSelected) {
+          setPaymentOption("full");
+        }
+        setCurrentStep(6);
+        break;
     }
   };
 
@@ -1300,6 +1482,8 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
 
   const handleCancel = () => {
     resetBooking();
+    setSubscriptionSelections({});
+    setSubscriptionFrequency("monthly");
     step1Form.reset({
       scheduledDate: undefined,
       scheduledTime: "",
@@ -1425,7 +1609,17 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         scheduledDate: new Date(step1Data.scheduledDate).toISOString().split("T")[0],
         scheduledTime: step1Data.scheduledTime,
         smsOptIn: step2Data.smsOptIn,
-        paymentOption,
+        paymentOption: maintenanceSelected ? "full" : paymentOption,
+        subscriptionIntent:
+          maintenanceSelected && maintenancePlan
+            ? {
+                planServiceId: maintenancePlan._id,
+                frequency: effectiveSubscriptionFrequency,
+                enrolledVehicleIndexes: enrolledMaintenanceVehicles.map(
+                  (candidate) => candidate.index,
+                ),
+              }
+            : undefined,
       });
       setResumeToken(nextResumeToken);
       setTravelQuote({
@@ -1442,6 +1636,8 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
 
       if (url) {
         resetBooking();
+        setSubscriptionSelections({});
+        setSubscriptionFrequency("monthly");
         if (typeof window !== "undefined") {
           localStorage.removeItem("selectedAddress");
           localStorage.removeItem("appointmentFormData");
@@ -1546,7 +1742,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           </Button>
         </div>
         <CardDescription className="text-base font-medium text-accent">
-          Step {currentStep} of 5:{" "}
+          Step {currentStep} of 6:{" "}
           {currentStep === 1
             ? "Date & Location"
             : currentStep === 2
@@ -1555,14 +1751,16 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                 ? "Vehicle Details"
                 : currentStep === 4
                   ? "Service Selection"
-                  : "Create Account & Payment"}
+                  : currentStep === 5
+                    ? "Maintenance Club"
+                    : "Create Account & Payment"}
         </CardDescription>
       </CardHeader>
 
       <CardContent className="p-6 md:p-8 space-y-6">
         {/* Progress Indicator */}
         <div className="flex items-center justify-center gap-2 mb-4">
-          {[1, 2, 3, 4, 5].map((step) => (
+          {[1, 2, 3, 4, 5, 6].map((step) => (
             <div
               key={step}
               className={`h-2.5 rounded-full transition-all duration-300 ${
@@ -2518,8 +2716,166 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           </Form>
         )}
 
-        {/* Step 5: Create Account & Payment */}
-        {currentStep === 5 && (() => {
+        {/* Step 5: Maintenance Club */}
+        {currentStep === 5 && (
+          <div className="space-y-5">
+            <div className="space-y-1">
+              <h3 className="text-lg font-semibold text-foreground">
+                Keep it clean without rebooking
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Add the {maintenancePlan?.name ?? "maintenance membership"} to
+                your visit and save on every recurring detail.
+              </p>
+            </div>
+
+            {!maintenancePlan || maintenanceEligibleVehicles.length === 0 ? (
+              <Card className="border-border/60">
+                <CardContent className="p-5 text-sm text-muted-foreground">
+                  No maintenance membership is available for this cart. The
+                  Club is offered when{" "}
+                  {maintenanceIncludedServiceNames || "the included service"} is
+                  the only core service for a vehicle. Add-ons are fine.
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                {availableSubscriptionFrequencies.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">Frequency</span>
+                    {availableSubscriptionFrequencies.map((frequency) => (
+                      <Button
+                        key={frequency}
+                        type="button"
+                        size="sm"
+                        variant={
+                          effectiveSubscriptionFrequency === frequency
+                            ? "default"
+                            : "outline"
+                        }
+                        onClick={() => setSubscriptionFrequency(frequency)}
+                      >
+                        {frequency === "monthly" ? "Monthly" : "Bi-weekly"}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {maintenanceEligibleVehicles.map((candidate) => {
+                    const selected = Boolean(
+                      subscriptionSelections[candidate.index],
+                    );
+                    const vehicleLabel =
+                      [
+                        candidate.vehicle.year,
+                        candidate.vehicle.make,
+                        candidate.vehicle.model,
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || `Vehicle ${candidate.index + 1}`;
+                    return (
+                      <Card
+                        key={candidate.index}
+                        className={cn(
+                          "border-border/60",
+                          selected && "border-primary/60 bg-primary/[0.03]",
+                        )}
+                      >
+                        <CardContent className="space-y-3 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold">
+                                {vehicleLabel}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {maintenancePlan.name} ·{" "}
+                                {maintenanceIncludedServiceNames}
+                              </p>
+                            </div>
+                            <Switch
+                              checked={selected}
+                              onCheckedChange={(checked) =>
+                                setSubscriptionSelections((prev) => ({
+                                  ...prev,
+                                  [candidate.index]: checked,
+                                }))
+                              }
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <p className="text-muted-foreground">
+                                Member price
+                              </p>
+                              <p className="text-sm font-semibold">
+                                ${candidate.planPrice.toFixed(2)} /{" "}
+                                {effectiveSubscriptionFrequency === "monthly"
+                                  ? "month"
+                                  : "2 weeks"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground">
+                                One-time price
+                              </p>
+                              <p className="text-sm font-medium">
+                                ${candidate.includedPrice.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                          {candidate.savings > 0 && (
+                            <p className="text-xs font-medium text-green-600">
+                              Save ${candidate.savings.toFixed(2)} per visit
+                              with the Club.
+                            </p>
+                          )}
+                          {candidate.petFee > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              Includes pet fee: +$
+                              {candidate.petFee.toFixed(2)} / visit.
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+
+                {maintenanceSelected && (
+                  <div className="space-y-1 rounded-xl border bg-muted/30 p-4">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Membership due today
+                      </span>
+                      <span className="font-medium">
+                        ${maintenanceTotalPerCycle.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        Then{" "}
+                        {effectiveSubscriptionFrequency === "monthly"
+                          ? "monthly"
+                          : "every 2 weeks"}
+                      </span>
+                      <span className="font-semibold">
+                        ${maintenanceTotalPerCycle.toFixed(2)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Add-ons and other one-time services are added at checkout.
+                      No deposit required.
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Step 6: Create Account & Payment */}
+        {currentStep === 6 && (() => {
           const vehicleCount = vehiclePricingContexts.length;
           const depositPerVehicle = depositSettings?.amountPerVehicle ?? 50;
           const depositTotal = depositPerVehicle * vehicleCount;
@@ -2529,6 +2885,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
             petFeeTotal,
             travelFeeTotal,
             orderTotal,
+            recurringTotal,
           } = checkoutSummary;
           const discountAmount = appliedCoupon
             ? appliedCoupon.discountType === "percent"
@@ -2537,7 +2894,8 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
             : 0;
           const discountedTotal = Math.max(0, Math.round((orderTotal - discountAmount) * 100) / 100);
 
-          const dueNow = paymentOption === "full" ? discountedTotal : Math.min(depositTotal, discountedTotal);
+          const effectivePaymentOption = maintenanceSelected ? "full" : paymentOption;
+          const dueNow = effectivePaymentOption === "full" ? discountedTotal : Math.min(depositTotal, discountedTotal);
           const remainingBalance = Math.max(0, discountedTotal - dueNow);
 
           return (
@@ -2606,7 +2964,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                   <span className="text-foreground">Total</span>
                   <span className="text-foreground">${discountedTotal.toFixed(2)}</span>
                 </div>
-                {paymentOption !== "full" && (
+                {effectivePaymentOption !== "full" && (
                   <div className="mt-3 space-y-1 border-t border-border/30 pt-3">
                     <div className="flex justify-between text-sm font-medium">
                       <span className="text-muted-foreground">Deposit Due Today</span>
@@ -2657,7 +3015,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                       {promoMessage}
                     </p>
                   )}
-                  {promoStatus === "valid" && paymentOption !== "full" && (
+                  {promoStatus === "valid" && effectivePaymentOption !== "full" && (
                     <p className="mt-1 text-[11px] text-muted-foreground">
                       The discount applies to your remaining balance, not the deposit.
                     </p>
@@ -2666,6 +3024,17 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
               </div>
 
               {/* Payment Option Selector */}
+              {maintenanceSelected ? (
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-sm">
+                  <p className="font-semibold text-foreground">
+                    Membership payment
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Your first month is due today. No deposit is required.
+                    Recurring billing starts next cycle.
+                  </p>
+                </div>
+              ) : (
               <div className="space-y-3">
                 <h3 className="font-semibold text-sm text-foreground">Payment Option</h3>
                 <div className="space-y-2">
@@ -2737,29 +3106,50 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                   </label>
                 </div>
               </div>
+              )}
 
               {/* Amount Due Now */}
               <div className="bg-muted/30 p-4 rounded-xl border border-border/50">
                 <div className="flex justify-between items-end">
                   <div>
                     <span className="font-bold text-base block text-foreground">
-                      {paymentOption === "full" ? "Total Due Now" : "Deposit Due Now"}
+                      {effectivePaymentOption === "full" ? "Total Due Today" : "Deposit Due Now"}
                     </span>
                     <span className="text-xs text-muted-foreground">Secure payment via Stripe</span>
                   </div>
                   <span className="font-bold text-xl text-primary">${dueNow.toFixed(2)}</span>
                 </div>
-                {paymentOption !== "full" && (
+                {effectivePaymentOption !== "full" && (
                   <p className="text-xs text-muted-foreground mt-2">
                     This deposit is non-refundable and will be applied to your service total.
                   </p>
                 )}
-                {paymentOption === "in_person" && (
+                {effectivePaymentOption === "in_person" && (
                   <p className="text-xs text-muted-foreground mt-1">
                     Remaining balance of ${remainingBalance.toFixed(2)} will be collected in person.
                   </p>
                 )}
               </div>
+
+              {maintenanceSelected && (
+                <div className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-4">
+                  <div className="flex justify-between text-sm">
+                    <span className="font-semibold text-foreground">
+                      Then{" "}
+                      {effectiveSubscriptionFrequency === "monthly"
+                        ? "monthly"
+                        : "every 2 weeks"}
+                    </span>
+                    <span className="font-bold text-foreground">
+                      ${recurringTotal.toFixed(2)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Your card is saved today and the membership renews
+                    automatically. Cancel anytime from your dashboard.
+                  </p>
+                </div>
+              )}
 
               <div className="mt-6">
                 {!isSignedIn ? (
@@ -2803,7 +3193,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
             </Button>
           )}
 
-          {currentStep < 5 ? (
+          {currentStep < 6 ? (
             <Button type="button" onClick={nextStep} className="flex-1 h-12">
               Continue
               <ArrowRight className="w-4 h-4 ml-2" />
@@ -2822,7 +3212,11 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                 </>
               ) : (
                 <>
-                  {paymentOption === "full" ? "Pay & Book" : "Pay Deposit & Book"}
+                  {maintenanceSelected || paymentOption === "full"
+                    ? maintenanceSelected
+                      ? "Pay & Start Membership"
+                      : "Pay & Book"
+                    : "Pay Deposit & Book"}
                   <ArrowRight className="w-4 h-4 ml-2" />
                 </>
               )}

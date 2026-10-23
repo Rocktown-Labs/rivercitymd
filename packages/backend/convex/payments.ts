@@ -2834,6 +2834,9 @@ async function createCheckoutSessionForDraft(
       draft.resumeToken,
     );
     sessionData.append("payment_intent_data[metadata][type]", "full");
+    if (draft.subscriptionIntent) {
+      sessionData.append("payment_intent_data[setup_future_usage]", "off_session");
+    }
     sessionData.append("line_items[0][price_data][currency]", "usd");
     sessionData.append(
       "line_items[0][price_data][unit_amount]",
