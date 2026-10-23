@@ -321,6 +321,7 @@ const schema = defineSchema({
         itemType: v.optional(
           v.union(
             v.literal("service"),
+            v.literal("subscription"),
             v.literal("pet_fee"),
             v.literal("travel_fee"),
           ),
@@ -340,6 +341,7 @@ const schema = defineSchema({
         itemType: v.optional(
           v.union(
             v.literal("service"),
+            v.literal("subscription"),
             v.literal("pet_fee"),
             v.literal("travel_fee"),
           ),
@@ -458,6 +460,7 @@ const schema = defineSchema({
         itemType: v.optional(
           v.union(
             v.literal("service"),
+            v.literal("subscription"),
             v.literal("pet_fee"),
             v.literal("travel_fee"),
           ),
@@ -470,6 +473,21 @@ const schema = defineSchema({
         quantity: v.number(),
         unitPrice: v.number(),
         totalPrice: v.number(),
+      }),
+    ),
+    subscriptionIntent: v.optional(
+      v.object({
+        planServiceId: v.id("services"),
+        planName: v.string(),
+        frequency: v.union(v.literal("monthly"), v.literal("biweekly")),
+        enrolledVehicleIndexes: v.array(v.number()),
+        petFeeVehicleIndexes: v.array(v.number()),
+        basePricePerCycle: v.number(),
+        petFeePerCycle: v.number(),
+        travelFeePerCycle: v.number(),
+        totalPerCycle: v.number(),
+        firstMonthTotal: v.number(),
+        travelBufferMinutes: v.optional(v.number()),
       }),
     ),
     status: v.union(
@@ -495,6 +513,7 @@ const schema = defineSchema({
     convertedUserId: v.optional(v.id("users")),
     convertedAppointmentId: v.optional(v.id("appointments")),
     convertedInvoiceId: v.optional(v.id("invoices")),
+    convertedSubscriptionId: v.optional(v.id("subscriptions")),
     claimedAt: v.optional(v.number()),
     claimedByClerkUserId: v.optional(v.string()),
     lastActivityAt: v.number(),
@@ -525,6 +544,7 @@ const schema = defineSchema({
         itemType: v.optional(
           v.union(
             v.literal("service"),
+            v.literal("subscription"),
             v.literal("pet_fee"),
             v.literal("travel_fee"),
           ),
@@ -600,6 +620,12 @@ const schema = defineSchema({
       notes: v.optional(v.string()),
     }),
     totalPrice: v.number(),
+    planServiceId: v.optional(v.id("services")),
+    basePricePerCycle: v.optional(v.number()),
+    petFeePerCycle: v.optional(v.number()),
+    travelFeePerCycle: v.optional(v.number()),
+    petFeeVehicleIds: v.optional(v.array(v.id("vehicles"))),
+    travelBufferMinutes: v.optional(v.number()),
     startDate: v.optional(v.string()),
     status: v.union(
       v.literal("pending_payment"),

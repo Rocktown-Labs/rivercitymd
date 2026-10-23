@@ -129,6 +129,24 @@ function BookingSuccessContent({
                   ? "Create an account or sign in with this email to manage your booking, reschedule, and see future invoices in one place."
                   : "Your payment succeeded. We’re finishing the booking in the background and will open account options as soon as it’s ready."}
               </p>
+              {draftContext.subscription ? (
+                <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                  <p className="text-sm font-semibold">
+                    {draftContext.subscription.planName}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    ${draftContext.subscription.totalPerCycle.toFixed(2)} /{" "}
+                    {draftContext.subscription.frequency === "monthly"
+                      ? "month"
+                      : "2 weeks"}{" "}
+                    · next charge {draftContext.subscription.nextChargeDate}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Your first month is paid today. Claim your account to manage
+                    the membership.
+                  </p>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">

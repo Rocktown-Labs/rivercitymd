@@ -212,4 +212,133 @@ describe("bookingDrafts pricing validation", () => {
     // If it was double-counted (all services for all vehicles): (60+30) * 2 = 180 min.
     expect(schedulingDuration).toBe(120);
   });
+
+  test("replaces the included service with the membership first month and includes recurring fees", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+
+    const { maintenanceServiceId, addonServiceId, planServiceId } = await t.run(
+      async (ctx) => {
+        const maintenanceServiceId = await ctx.db.insert("services", {
+          name: "Maintenance Refresh",
+          description: "Monthly maintenance.",
+          basePrice: 175,
+          basePriceMedium: 175,
+          duration: 90,
+          serviceType: "standard",
+          bookingRole: "core",
+          isActive: true,
+          isSubscribable: true,
+          subscriptionFrequencies: ["monthly", "biweekly"],
+        });
+        const addonServiceId = await ctx.db.insert("services", {
+          name: "Engine Bay Cleaning",
+          description: "One-time add-on.",
+          basePrice: 100,
+          basePriceMedium: 100,
+          duration: 60,
+          serviceType: "addon",
+          bookingRole: "addon",
+          isActive: true,
+        });
+        const planServiceId = await ctx.db.insert("services", {
+          name: "Maintenance Club",
+          description: "Monthly membership.",
+          basePrice: 145,
+          basePriceMedium: 145,
+          duration: 90,
+          serviceType: "subscription",
+          bookingRole: "core",
+          isActive: true,
+          includedServiceIds: [maintenanceServiceId],
+          subscriptionFrequencies: ["monthly"],
+        });
+        await ctx.db.insert("petFeeSettings", {
+          basePriceSmall: 40,
+          basePriceMedium: 50,
+          basePriceLarge: 60,
+          timeAddMinutes: 15,
+          isActive: true,
+        });
+        return { maintenanceServiceId, addonServiceId, planServiceId };
+      },
+    );
+
+    const draft = await t.mutation(
+      internal.bookingDrafts.createOrUpdateInternal,
+      {
+        name: "Membership Booker",
+        email: "membership@example.com",
+        phone: "555-0110",
+        address: {
+          street: "100 Main St",
+          city: "Little Rock",
+          state: "AR",
+          zip: "72201",
+        },
+        vehicles: [
+          {
+            year: 2022,
+            make: "Toyota",
+            model: "Highlander",
+            size: "medium",
+            hasPet: true,
+            serviceIds: [maintenanceServiceId, addonServiceId],
+          },
+        ],
+        serviceIds: [maintenanceServiceId, addonServiceId],
+        scheduledDate: "2026-08-03",
+        scheduledTime: "10:00",
+        travelDistanceMiles: 0,
+        subscriptionIntent: {
+          planServiceId,
+          frequency: "monthly",
+          enrolledVehicleIndexes: [0],
+        },
+      },
+    );
+
+    const stored = await t.run(async (ctx) => ctx.db.get(draft.draftId));
+
+    expect(stored?.paymentOption).toBe("full");
+    expect(stored?.depositAmount).toBe(295);
+    expect(stored?.remainingBalance).toBe(0);
+    expect(stored?.totalPrice).toBe(295);
+    expect(stored?.subscriptionIntent).toMatchObject({
+      planServiceId,
+      frequency: "monthly",
+      enrolledVehicleIndexes: [0],
+      petFeeVehicleIndexes: [0],
+      basePricePerCycle: 145,
+      petFeePerCycle: 50,
+      travelFeePerCycle: 0,
+      totalPerCycle: 195,
+    });
+    expect(stored?.priceSnapshot).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          itemType: "subscription",
+          serviceId: planServiceId,
+          unitPrice: 145,
+        }),
+        expect.objectContaining({
+          itemType: "service",
+          serviceId: addonServiceId,
+          unitPrice: 100,
+        }),
+        expect.objectContaining({
+          itemType: "pet_fee",
+          unitPrice: 50,
+        }),
+      ]),
+    );
+    expect(
+      stored?.priceSnapshot.some(
+        (item) =>
+          item.itemType === "service" &&
+          item.serviceId === maintenanceServiceId,
+      ),
+    ).toBe(false);
+    expect(stored?.duration).toBe(165);
+  });
 });

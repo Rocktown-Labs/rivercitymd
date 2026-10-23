@@ -4,6 +4,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Maintenance Club Booking Upsell**: Added a Maintenance Club step before checkout that replaces the one-time Maintenance Refresh with the member price, includes pet and travel fees in the recurring amount, hides the deposit option, saves the card, and starts the recurring Stripe membership on the next cycle while keeping the guest claim flow.
 - **Semi Vehicle Pricing**: Added a Semi vehicle type, heavy-truck make classification, and legacy-size pricing fallback so semi-specific services appear for Freightliner, Kenworth, Peterbilt, Mack, Western Star, International, Hino, and Scania vehicles while regular large-vehicle services remain available.
 - **Dashboard Subscription Filters**: Added All, Active, and Cancelled tabs to the customer dashboard subscriptions page, with per-tab counts and empty states so cancelled plans no longer mix with open subscriptions.
 - **Subscription Payment Lifecycle**: Added start-date billing anchors, reusable customer checkout, customer pay/decline/cancel actions, and an inline admin flow for creating a new customer before issuing a subscription.

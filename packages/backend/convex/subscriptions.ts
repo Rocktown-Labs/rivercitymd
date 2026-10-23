@@ -9,7 +9,7 @@ import {
 import { v } from "convex/values";
 import { getUserIdFromIdentity, requireAdmin, isAdmin } from "./auth";
 import { internal, api } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getEffectiveServicePrice, type VehicleSize } from "./lib/pricing";
 
 // --- Helpers ---
@@ -841,6 +841,14 @@ export const createCheckoutSession = internalAction({
         serviceNames.push(service.name);
       }
     }
+    const petFeeSettings = await ctx.runQuery(
+      internal.petFeeSettings.getInternal,
+      {},
+    );
+    totalDuration +=
+      (petFeeSettings?.timeAddMinutes ?? 0) *
+        (sub.petFeeVehicleIds?.length ?? 0) +
+      (sub.travelBufferMinutes ?? 0);
     const availability = await ctx.runQuery(
       api.availability.checkAvailability,
       {
@@ -999,6 +1007,141 @@ export const completeSetup = internalAction({
     return null;
   },
 });
+export const saveStripeSubscriptionId = internalMutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    stripeSubscriptionId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.subscriptionId, {
+      stripeSubscriptionId: args.stripeSubscriptionId,
+    });
+  },
+});
+
+export const createStripeSubscriptionFromBooking = internalAction({
+  args: { subscriptionId: v.id("subscriptions") },
+  handler: async (ctx, args): Promise<null> => {
+    const sub = await ctx.runQuery(internal.subscriptions.getByIdInternal, {
+      subscriptionId: args.subscriptionId,
+    });
+    if (!sub || sub.status === "cancelled") return null;
+    if (sub.stripeSubscriptionId) return null;
+
+    const user = await ctx.runQuery(internal.users.getByIdInternal, {
+      userId: sub.userId,
+    });
+    if (!user) throw new Error("User not found");
+
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecretKey) throw new Error("STRIPE_SECRET_KEY not set");
+
+    const stripeCustomerId =
+      user.stripeCustomerId ||
+      (await ctx.runAction(internal.users.ensureStripeCustomer, {
+        userId: sub.userId,
+      }));
+
+    const paymentMethodsResponse = await fetch(
+      `https://api.stripe.com/v1/customers/${stripeCustomerId}/payment_methods?type=card&limit=1`,
+      {
+        headers: { Authorization: `Bearer ${stripeSecretKey}` },
+      },
+    );
+    if (!paymentMethodsResponse.ok) {
+      const errText = await paymentMethodsResponse.text();
+      throw new Error(
+        `Stripe payment method lookup failed: ${paymentMethodsResponse.status} ${errText}`,
+      );
+    }
+    const paymentMethods = await paymentMethodsResponse.json();
+    const paymentMethodId = paymentMethods?.data?.[0]?.id as string | undefined;
+    if (!paymentMethodId) {
+      throw new Error("No saved card found for this membership.");
+    }
+
+    const defaultPaymentMethodResponse = await fetch(
+      `https://api.stripe.com/v1/customers/${stripeCustomerId}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${stripeSecretKey}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          "invoice_settings[default_payment_method]": paymentMethodId,
+        }),
+      },
+    );
+    if (!defaultPaymentMethodResponse.ok) {
+      const errText = await defaultPaymentMethodResponse.text();
+      throw new Error(
+        `Stripe default payment method update failed: ${defaultPaymentMethodResponse.status} ${errText}`,
+      );
+    }
+
+    const nextDate =
+      sub.nextScheduledDate ||
+      sub.startDate ||
+      new Date().toISOString().split("T")[0];
+    const trialEnd = Math.floor(
+      new Date(`${nextDate}T12:00:00`).getTime() / 1000,
+    );
+
+    const body = new URLSearchParams({
+      customer: stripeCustomerId,
+      default_payment_method: paymentMethodId,
+      "items[0][quantity]": "1",
+      "items[0][price_data][currency]": "usd",
+      "items[0][price_data][unit_amount]": Math.round(
+        sub.totalPrice * 100,
+      ).toString(),
+      "items[0][price_data][product_data][name]":
+        "River City MD Membership",
+      "items[0][price_data][product_data][description]":
+        `${sub.frequency === "monthly" ? "Monthly" : "Biweekly"} membership`,
+      trial_end: trialEnd.toString(),
+      "metadata[subscriptionId]": args.subscriptionId,
+      "metadata[source]": "booking_membership",
+    });
+    if (sub.frequency === "monthly") {
+      body.set("items[0][price_data][recurring][interval]", "month");
+    } else {
+      body.set("items[0][price_data][recurring][interval]", "week");
+      body.set(
+        "items[0][price_data][recurring][interval_count]",
+        "2",
+      );
+    }
+
+    const response = await fetch("https://api.stripe.com/v1/subscriptions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stripeSecretKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `Stripe subscription creation failed: ${response.status} ${errText}`,
+      );
+    }
+
+    const stripeSubscription = await response.json();
+    if (!stripeSubscription?.id) {
+      throw new Error("Stripe did not return a subscription");
+    }
+
+    await ctx.runMutation(internal.subscriptions.saveStripeSubscriptionId, {
+      subscriptionId: args.subscriptionId,
+      stripeSubscriptionId: stripeSubscription.id,
+    });
+    return null;
+  },
+});
+
 export const startCheckout = action({
   args: { subscriptionId: v.id("subscriptions") },
   returns: v.string(),
@@ -1119,6 +1262,14 @@ export const createNextAppointment = internalAction({
         serviceNames.push(service.name);
       }
     }
+    const petFeeSettings = await ctx.runQuery(
+      internal.petFeeSettings.getInternal,
+      {},
+    );
+    const petFeeVehicleCount = sub.petFeeVehicleIds?.length ?? 0;
+    totalDuration +=
+      (petFeeSettings?.timeAddMinutes ?? 0) * petFeeVehicleCount +
+      (sub.travelBufferMinutes ?? 0);
 
     // Idempotency: skip if an appointment for this cycle already exists
     // (duplicate webhook deliveries would otherwise double-book).
@@ -1175,18 +1326,46 @@ export const createNextAppointment = internalAction({
     );
 
     // Create invoice
-    const invoiceItems = [];
+    const invoiceItems: Array<{
+      itemType?: "service" | "subscription" | "pet_fee" | "travel_fee";
+      serviceId?: Id<"services">;
+      serviceName: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+    }> = [];
+    const basePricePerCycle = sub.basePricePerCycle ?? sub.totalPrice;
     for (const serviceId of sub.serviceIds) {
       const service = await ctx.runQuery(internal.services.getServiceById, { serviceId });
       if (service) {
+        const lineTotal = basePricePerCycle / sub.serviceIds.length;
         invoiceItems.push({
+          itemType: "service",
           serviceId,
           serviceName: service.name,
           quantity: sub.vehicleIds.length,
-          unitPrice: sub.totalPrice / sub.vehicleIds.length / sub.serviceIds.length,
-          totalPrice: sub.totalPrice / sub.serviceIds.length,
+          unitPrice: lineTotal / sub.vehicleIds.length,
+          totalPrice: lineTotal,
         });
       }
+    }
+    if ((sub.petFeePerCycle ?? 0) > 0 && petFeeVehicleCount > 0) {
+      invoiceItems.push({
+        itemType: "pet_fee",
+        serviceName: "Pet fee",
+        quantity: petFeeVehicleCount,
+        unitPrice: (sub.petFeePerCycle ?? 0) / petFeeVehicleCount,
+        totalPrice: sub.petFeePerCycle ?? 0,
+      });
+    }
+    if ((sub.travelFeePerCycle ?? 0) > 0) {
+      invoiceItems.push({
+        itemType: "travel_fee",
+        serviceName: "Travel fee",
+        quantity: 1,
+        unitPrice: sub.travelFeePerCycle ?? 0,
+        totalPrice: sub.travelFeePerCycle ?? 0,
+      });
     }
 
     const invoiceNumber = `SUB-${Date.now()}`;
@@ -1286,7 +1465,15 @@ export const insertInvoice = internalMutation({
     invoiceNumber: v.string(),
     items: v.array(
       v.object({
-        serviceId: v.id("services"),
+        itemType: v.optional(
+          v.union(
+            v.literal("service"),
+            v.literal("subscription"),
+            v.literal("pet_fee"),
+            v.literal("travel_fee"),
+          ),
+        ),
+        serviceId: v.optional(v.id("services")),
         serviceName: v.string(),
         quantity: v.number(),
         unitPrice: v.number(),

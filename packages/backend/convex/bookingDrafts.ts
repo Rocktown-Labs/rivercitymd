@@ -38,7 +38,7 @@ const HOLD_DURATION_MS = 15 * 60 * 1000;
 const ABANDONED_EMAIL_DELAY_MS = 60 * 60 * 1000;
 
 type DraftPriceItem = {
-  itemType: "service" | "pet_fee" | "travel_fee";
+  itemType: "service" | "subscription" | "pet_fee" | "travel_fee";
   serviceId?: Id<"services">;
   vehicleId?: Id<"vehicles">;
   vehicleLabel?: string;
@@ -49,6 +49,23 @@ type DraftPriceItem = {
   totalPrice: number;
 };
 
+type SubscriptionIntentInput = {
+  planServiceId: Id<"services">;
+  frequency: "monthly" | "biweekly";
+  enrolledVehicleIndexes: number[];
+};
+
+type SubscriptionIntent = SubscriptionIntentInput & {
+  planName: string;
+  petFeeVehicleIndexes: number[];
+  basePricePerCycle: number;
+  petFeePerCycle: number;
+  travelFeePerCycle: number;
+  totalPerCycle: number;
+  firstMonthTotal: number;
+  travelBufferMinutes?: number;
+};
+
 type DraftPricingResult = {
   services: Doc<"services">[];
   items: DraftPriceItem[];
@@ -57,6 +74,7 @@ type DraftPricingResult = {
   depositAmount: number;
   remainingBalance: number;
   travelFee: number;
+  subscriptionIntent?: SubscriptionIntent;
 };
 
 const addressValidator = v.object({
@@ -104,6 +122,12 @@ const draftVehicleValidator = v.object({
   hasHeavySoil: v.optional(v.boolean()),
   beforePhotos: v.optional(v.array(beforePhotoValidator)),
   serviceIds: v.optional(v.array(v.id("services"))),
+});
+
+const subscriptionIntentInputValidator = v.object({
+  planServiceId: v.id("services"),
+  frequency: v.union(v.literal("monthly"), v.literal("biweekly")),
+  enrolledVehicleIndexes: v.array(v.number()),
 });
 
 const outOfAreaRequestVehicleValidator = v.object({
@@ -160,6 +184,19 @@ type ConvertedDraftResult = {
 
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
+}
+
+function computeNextSubscriptionDate(
+  frequency: "monthly" | "biweekly",
+  fromDate: string,
+) {
+  const from = new Date(`${fromDate}T12:00:00`);
+  if (frequency === "monthly") {
+    from.setMonth(from.getMonth() + 1);
+  } else {
+    from.setDate(from.getDate() + 14);
+  }
+  return from.toISOString().split("T")[0];
 }
 
 function createResumeToken() {
@@ -340,6 +377,43 @@ async function getServicesForDraft(
   );
 }
 
+async function getSubscriptionPlanPriceForVehicle(
+  ctx: any,
+  plan: Doc<"services">,
+  vehicle: {
+    vehicleTypeId?: Id<"vehicleTypes">;
+    size?: VehicleSize;
+  },
+  fallbackSize: VehicleSize,
+) {
+  if (vehicle.vehicleTypeId) {
+    const row = await ctx.db
+      .query("serviceVehiclePrices")
+      .withIndex("by_service_and_vehicle_type", (q: any) =>
+        q.eq("serviceId", plan._id).eq("vehicleTypeId", vehicle.vehicleTypeId),
+      )
+      .first();
+    if (row?.isAvailable && row.price > 0) {
+      return row.price;
+    }
+    return 0;
+  }
+
+  const size = vehicle.size ?? fallbackSize;
+  const rows = await ctx.db
+    .query("serviceVehiclePrices")
+    .withIndex("by_service", (q: any) => q.eq("serviceId", plan._id))
+    .collect();
+  for (const row of rows) {
+    if (!row.isAvailable || row.price <= 0) continue;
+    const vehicleType = await ctx.db.get(row.vehicleTypeId);
+    if (vehicleType?.legacySize === size) {
+      return row.price;
+    }
+  }
+  return getEffectiveServicePrice(plan, size);
+}
+
 async function buildDraftPricing(args: {
   ctx: any;
   serviceIds: Id<"services">[];
@@ -359,6 +433,7 @@ async function buildDraftPricing(args: {
   existingVehicleServices?: Array<{ vehicleId: Id<"vehicles">; serviceIds: Id<"services">[] }>;
   petFeeExistingVehicleIds: Id<"vehicles">[];
   travelDistanceMiles?: number;
+  subscriptionIntent?: SubscriptionIntentInput;
 }): Promise<DraftPricingResult> {
   // Collect all serviceIds across all vehicles
   const allServiceIdsSet = new Set<Id<"services">>();
@@ -387,22 +462,117 @@ async function buildDraftPricing(args: {
     })),
   ];
 
-  const items: DraftPriceItem[] = [];
-  let duration = 0;
-  for (const { vehicle, vehicleId, vehicleLabel } of bookingVehicles) {
-    let vehicleServiceIds = args.serviceIds;
-    if (vehicleId) {
-      const mapping = args.existingVehicleServices?.find((m) => m.vehicleId === vehicleId);
+  const getVehicleServiceIds = (vehicle: (typeof bookingVehicles)[number]) => {
+    if (vehicle.vehicleId) {
+      const mapping = args.existingVehicleServices?.find(
+        (m) => m.vehicleId === vehicle.vehicleId,
+      );
       if (mapping && mapping.serviceIds.length > 0) {
-        vehicleServiceIds = mapping.serviceIds;
+        return mapping.serviceIds;
       }
-    } else {
-      const draftVehicle = vehicle as { serviceIds?: Id<"services">[] };
-      if (draftVehicle.serviceIds && draftVehicle.serviceIds.length > 0) {
-        vehicleServiceIds = draftVehicle.serviceIds;
-      }
+      return args.serviceIds;
+    }
+    const draftVehicle = vehicle.vehicle as { serviceIds?: Id<"services">[] };
+    if (draftVehicle.serviceIds && draftVehicle.serviceIds.length > 0) {
+      return draftVehicle.serviceIds;
+    }
+    return args.serviceIds;
+  };
+
+  let plan: Doc<"services"> | null = null;
+  let includedServiceIds: Id<"services">[] = [];
+  const enrolledIndexSet = new Set<number>();
+  let basePricePerCycle = 0;
+
+  if (args.subscriptionIntent) {
+    plan = await args.ctx.db.get(args.subscriptionIntent.planServiceId);
+    if (!plan) {
+      throw new ConvexError({
+        code: "SUBSCRIPTION_PLAN_NOT_FOUND",
+        message: "The selected membership plan is no longer available.",
+      });
+    }
+    if (!plan.isActive) {
+      throw new ConvexError({
+        code: "SUBSCRIPTION_PLAN_NOT_AVAILABLE",
+        message: "The selected membership plan is currently unavailable.",
+      });
+    }
+    includedServiceIds = plan.includedServiceIds ?? [];
+    if (includedServiceIds.length === 0) {
+      throw new ConvexError({
+        code: "SUBSCRIPTION_PLAN_NOT_CONFIGURED",
+        message: "This membership plan has no included services configured.",
+      });
     }
 
+    const requestedIndexes = [...new Set(args.subscriptionIntent.enrolledVehicleIndexes)]
+      .sort((a, b) => a - b);
+    if (requestedIndexes.length === 0) {
+      throw new ConvexError({
+        code: "SUBSCRIPTION_VEHICLES_REQUIRED",
+        message: "Select at least one vehicle for the membership.",
+      });
+    }
+
+    for (const vehicleIndex of requestedIndexes) {
+      const bookingVehicle = bookingVehicles[vehicleIndex];
+      if (!bookingVehicle) {
+        throw new ConvexError({
+          code: "SUBSCRIPTION_VEHICLE_NOT_FOUND",
+          message: "One of the membership vehicles is no longer available.",
+        });
+      }
+      const vehicleServiceIds = getVehicleServiceIds(bookingVehicle);
+      const vehicleServices = services.filter((service) =>
+        vehicleServiceIds.includes(service._id),
+      );
+      const missingIncludedService = includedServiceIds.some(
+        (serviceId) => !vehicleServiceIds.includes(serviceId),
+      );
+      if (missingIncludedService) {
+        throw new ConvexError({
+          code: "SUBSCRIPTION_SERVICE_REQUIRED",
+          message: `${plan.name} requires ${includedServiceIds
+            .map((id) => services.find((service) => service._id === id)?.name)
+            .filter(Boolean)
+            .join(", ")} for every enrolled vehicle.`,
+        });
+      }
+      const disallowedService = vehicleServices.find(
+        (service) =>
+          !includedServiceIds.includes(service._id) &&
+          service.serviceType !== "addon" &&
+          service.bookingRole !== "addon",
+      );
+      if (disallowedService) {
+        throw new ConvexError({
+          code: "SUBSCRIPTION_MIXED_SERVICES",
+          message: `${plan.name} can only be combined with add-ons. Remove ${disallowedService.name} or book it separately.`,
+        });
+      }
+      const planPrice = await getSubscriptionPlanPriceForVehicle(
+        args.ctx,
+        plan,
+        bookingVehicle.vehicle,
+        args.vehicleSize,
+      );
+      if (planPrice <= 0) {
+        throw new ConvexError({
+          code: "SUBSCRIPTION_PLAN_NOT_AVAILABLE",
+          message: `${plan.name} is not available for ${bookingVehicle.vehicleLabel}.`,
+        });
+      }
+      enrolledIndexSet.add(vehicleIndex);
+      basePricePerCycle += planPrice;
+    }
+  }
+
+  const items: DraftPriceItem[] = [];
+  let duration = 0;
+  for (const [vehicleIndex, bookingVehicle] of bookingVehicles.entries()) {
+    const { vehicle, vehicleId, vehicleLabel } = bookingVehicle;
+    const vehicleServiceIds = getVehicleServiceIds(bookingVehicle);
     const vehicleServices = services.filter((s) => vehicleServiceIds.includes(s._id));
     assertBookableServices(vehicleServices, vehicleServiceIds, vehicle.size ?? args.vehicleSize);
     const vehicleCondition =
@@ -444,6 +614,9 @@ async function buildDraftPricing(args: {
         }
       }
       duration += serviceDuration;
+      if (enrolledIndexSet.has(vehicleIndex) && includedServiceIds.includes(service._id)) {
+        continue;
+      }
       items.push({
         itemType: "service" as const,
         serviceId: service._id,
@@ -454,6 +627,29 @@ async function buildDraftPricing(args: {
         quantity: 1,
         unitPrice,
         totalPrice: unitPrice,
+      });
+    }
+  }
+
+  if (plan && enrolledIndexSet.size > 0) {
+    for (const vehicleIndex of [...enrolledIndexSet].sort((a, b) => a - b)) {
+      const bookingVehicle = bookingVehicles[vehicleIndex];
+      const planPrice = await getSubscriptionPlanPriceForVehicle(
+        args.ctx,
+        plan,
+        bookingVehicle.vehicle,
+        args.vehicleSize,
+      );
+      items.push({
+        itemType: "subscription" as const,
+        serviceId: plan._id,
+        vehicleId: bookingVehicle.vehicleId,
+        vehicleLabel: bookingVehicle.vehicleLabel,
+        vehicleTypeId: bookingVehicle.vehicle.vehicleTypeId,
+        serviceName: `${plan.name} - ${bookingVehicle.vehicleLabel} (first month)`,
+        quantity: 1,
+        unitPrice: planPrice,
+        totalPrice: planPrice,
       });
     }
   }
@@ -497,6 +693,25 @@ async function buildDraftPricing(args: {
     })
     .filter((item) => item.quantity > 0 && item.totalPrice > 0);
 
+  const petFeeVehicleIndexes: number[] = [];
+  let petFeePerCycle = 0;
+  if (plan && enrolledIndexSet.size > 0 && petFeeSettings.isActive !== false) {
+    for (const vehicleIndex of enrolledIndexSet) {
+      const bookingVehicle = bookingVehicles[vehicleIndex];
+      const hasPetFee = bookingVehicle.vehicleId
+        ? petFeeVehicleIdSet.has(bookingVehicle.vehicleId)
+        : Boolean(
+            (bookingVehicle.vehicle as { hasPet?: boolean }).hasPet,
+          );
+      if (!hasPetFee) continue;
+      petFeeVehicleIndexes.push(vehicleIndex);
+      petFeePerCycle += getEffectivePetFeePrice(
+        petFeeSettings,
+        bookingVehicle.vehicle.size ?? args.vehicleSize,
+      );
+    }
+  }
+
   const travelFee: number =
     args.travelDistanceMiles !== undefined
       ? calculateTravelFeeForMiles(args.travelDistanceMiles, travelFeeSettings)
@@ -534,8 +749,14 @@ async function buildDraftPricing(args: {
     {},
   );
   const depositPerVehicle = depositSettings?.amountPerVehicle ?? 50;
-  const depositAmount = Math.min(depositPerVehicle * args.vehicleCount, totalPrice);
-  const remainingBalance = Math.max(0, totalPrice - depositAmount);
+  const travelFeePerCycle = enrolledIndexSet.size > 0 ? travelFee : 0;
+  const totalPerCycle = basePricePerCycle + petFeePerCycle + travelFeePerCycle;
+  const depositAmount = args.subscriptionIntent
+    ? 0
+    : Math.min(depositPerVehicle * args.vehicleCount, totalPrice);
+  const remainingBalance = args.subscriptionIntent
+    ? 0
+    : Math.max(0, totalPrice - depositAmount);
 
   return {
     services,
@@ -545,6 +766,22 @@ async function buildDraftPricing(args: {
     depositAmount,
     remainingBalance,
     travelFee,
+    subscriptionIntent:
+      plan && enrolledIndexSet.size > 0
+        ? {
+            planServiceId: plan._id,
+            planName: plan.name,
+            frequency: args.subscriptionIntent!.frequency,
+            enrolledVehicleIndexes: [...enrolledIndexSet].sort((a, b) => a - b),
+            petFeeVehicleIndexes,
+            basePricePerCycle,
+            petFeePerCycle,
+            travelFeePerCycle,
+            totalPerCycle,
+            firstMonthTotal: totalPerCycle,
+            travelBufferMinutes,
+          }
+        : undefined,
   };
 }
 
@@ -578,6 +815,7 @@ export const createOrUpdateInternal = internalMutation({
     scheduledTime: v.string(),
     paymentOption: v.optional(bookingPaymentOptionValidator),
     travelDistanceMiles: v.number(),
+    subscriptionIntent: v.optional(subscriptionIntentInputValidator),
   },
   returns: v.object({
     draftId: v.id("bookingDrafts"),
@@ -663,7 +901,12 @@ export const createOrUpdateInternal = internalMutation({
       existingVehicleServices: args.existingVehicleServices,
       petFeeExistingVehicleIds,
       travelDistanceMiles: args.travelDistanceMiles,
+      subscriptionIntent: args.subscriptionIntent,
     });
+
+    const paymentOption = pricing.subscriptionIntent
+      ? "full"
+      : (args.paymentOption ?? "deposit");
 
     const slotAvailability = await ctx.runQuery(api.availability.checkAvailability, {
       date: scheduledDate,
@@ -699,15 +942,12 @@ export const createOrUpdateInternal = internalMutation({
         vehicleSize,
         totalPrice: pricing.totalPrice,
         depositAmount:
-          (args.paymentOption ?? "deposit") === "full"
-            ? pricing.totalPrice
-            : pricing.depositAmount,
+          paymentOption === "full" ? pricing.totalPrice : pricing.depositAmount,
         remainingBalance:
-          (args.paymentOption ?? "deposit") === "full"
-            ? 0
-            : pricing.remainingBalance,
-        paymentOption: args.paymentOption ?? "deposit",
+          paymentOption === "full" ? 0 : pricing.remainingBalance,
+        paymentOption,
         priceSnapshot: pricing.items,
+        subscriptionIntent: pricing.subscriptionIntent,
         travelDistanceMiles: args.travelDistanceMiles,
         travelFee: pricing.travelFee,
         status: "draft",
@@ -749,15 +989,12 @@ export const createOrUpdateInternal = internalMutation({
       vehicleSize,
       totalPrice: pricing.totalPrice,
       depositAmount:
-        (args.paymentOption ?? "deposit") === "full"
-          ? pricing.totalPrice
-          : pricing.depositAmount,
+        paymentOption === "full" ? pricing.totalPrice : pricing.depositAmount,
       remainingBalance:
-        (args.paymentOption ?? "deposit") === "full"
-          ? 0
-          : pricing.remainingBalance,
-      paymentOption: args.paymentOption ?? "deposit",
+        paymentOption === "full" ? 0 : pricing.remainingBalance,
+      paymentOption,
       priceSnapshot: pricing.items,
+      subscriptionIntent: pricing.subscriptionIntent,
       travelDistanceMiles: args.travelDistanceMiles,
       travelFee: pricing.travelFee,
       status: "draft",
@@ -792,6 +1029,7 @@ export const createOrUpdate = action({
     scheduledDate: v.string(),
     scheduledTime: v.string(),
     paymentOption: v.optional(bookingPaymentOptionValidator),
+    subscriptionIntent: v.optional(subscriptionIntentInputValidator),
   },
   returns: v.object({
     draftId: v.id("bookingDrafts"),
@@ -1380,6 +1618,79 @@ export const convertSuccessfulCheckout = internalMutation({
       discountAmount: discountAmount > 0 ? discountAmount : undefined,
     });
 
+    let convertedSubscriptionId: Id<"subscriptions"> | undefined;
+    if (draft.subscriptionIntent) {
+      const intent = draft.subscriptionIntent;
+      const enrolledVehicleIds = intent.enrolledVehicleIndexes.map(
+        (index) => vehicleIds[index],
+      );
+      if (
+        enrolledVehicleIds.length !== intent.enrolledVehicleIndexes.length ||
+        enrolledVehicleIds.some((vehicleId) => !vehicleId)
+      ) {
+        throw new Error(
+          "One or more membership vehicles are no longer available. Please contact support so we can finalize this booking.",
+        );
+      }
+      const petFeeVehicleIdsForSubscription = intent.petFeeVehicleIndexes
+        .map((index) => vehicleIds[index])
+        .filter((vehicleId): vehicleId is Id<"vehicles"> => Boolean(vehicleId));
+      const plan = await ctx.db.get(intent.planServiceId);
+      if (!plan) {
+        throw new Error("The selected membership plan is no longer available.");
+      }
+      const includedServiceIds = plan.includedServiceIds ?? [];
+      if (includedServiceIds.length === 0) {
+        throw new Error("The selected membership plan has no included services.");
+      }
+      const nextScheduledDate = computeNextSubscriptionDate(
+        intent.frequency,
+        draft.scheduledDate,
+      );
+      convertedSubscriptionId = await ctx.db.insert("subscriptions", {
+        userId: user._id,
+        serviceIds: includedServiceIds,
+        vehicleIds: enrolledVehicleIds as Id<"vehicles">[],
+        frequency: intent.frequency,
+        preferredDayOfWeek: new Date(`${draft.scheduledDate}T12:00:00`).getDay(),
+        preferredTime: draft.scheduledTime,
+        location: {
+          street: draft.address.street,
+          city: draft.address.city,
+          state: draft.address.state,
+          zip: draft.address.zip,
+          notes: draft.address.notes,
+        },
+        totalPrice: intent.totalPerCycle,
+        planServiceId: intent.planServiceId,
+        basePricePerCycle: intent.basePricePerCycle,
+        petFeePerCycle: intent.petFeePerCycle,
+        travelFeePerCycle: intent.travelFeePerCycle,
+        petFeeVehicleIds: petFeeVehicleIdsForSubscription,
+        travelBufferMinutes: intent.travelBufferMinutes,
+        startDate: draft.scheduledDate,
+        status: "active",
+        nextScheduledDate,
+        lastAppointmentId: appointmentId,
+        createdBy: user._id,
+        notes: "Created from booking membership",
+      });
+
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.createStripeSubscriptionFromBooking,
+        { subscriptionId: convertedSubscriptionId },
+      );
+      await ctx.scheduler.runAfter(
+        0,
+        internal.subscriptions.createNextAppointment,
+        {
+          subscriptionId: convertedSubscriptionId,
+          mode: "preschedule",
+        },
+      );
+    }
+
     await ctx.db.patch(draft._id, {
       sourceUserId: user._id,
       status: "converted",
@@ -1387,6 +1698,7 @@ export const convertSuccessfulCheckout = internalMutation({
       convertedUserId: user._id,
       convertedAppointmentId: appointmentId,
       convertedInvoiceId: invoiceId,
+      convertedSubscriptionId,
       stripeCustomerId: args.stripeCustomerId ?? draft.stripeCustomerId,
       lastActivityAt: Date.now(),
     });
@@ -1447,6 +1759,20 @@ export const getPublicContext = query({
       convertedAppointmentId: draft.convertedAppointmentId,
       convertedInvoiceId: draft.convertedInvoiceId,
       convertedUserId: draft.convertedUserId,
+      convertedSubscriptionId: draft.convertedSubscriptionId,
+      subscription: draft.subscriptionIntent
+        ? {
+            planName: draft.subscriptionIntent.planName,
+            frequency: draft.subscriptionIntent.frequency,
+            totalPerCycle: draft.subscriptionIntent.totalPerCycle,
+            firstMonthTotal: draft.subscriptionIntent.firstMonthTotal,
+            nextChargeDate: computeNextSubscriptionDate(
+              draft.subscriptionIntent.frequency,
+              draft.scheduledDate,
+            ),
+            active: Boolean(draft.convertedSubscriptionId),
+          }
+        : null,
       abandonedEmailSentAt: draft.abandonedEmailSentAt,
       cancelledAt: draft.cancelledAt,
       expiredAt: draft.expiredAt,
