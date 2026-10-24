@@ -16,6 +16,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Admin Recovery Exclusion**: Exclude admin and team accounts from automatic recovery and win-back audiences, while preserving the owner allowlist for the test recovery email.
 - **Recovery Sweep Customer Exclusions**: Skip expired Maintenance Refresh drafts whose email or name matches an existing customer with appointments, invoices, or subscriptions. The owner's test email is allowlisted so the real email can still be reviewed.
 - **Unsubscribe Page Access**: Allow `/unsubscribe` through the Clerk middleware so campaign recipients can manage email preferences without signing in.
 - **Abandoned Recovery Pipeline**: Send the first recovery email at 20 minutes and a follow-up at 24 hours, keep recovery jobs alive after a draft expires, use the public web origin for resume links, and track recovery sends, clicks, and conversions.
