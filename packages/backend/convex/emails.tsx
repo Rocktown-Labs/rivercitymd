@@ -45,6 +45,7 @@ import {
   AppointmentReminderEmail,
   BookingReceivedEmail,
   AbandonedCheckoutRecoveryEmail,
+  MaintenanceClubCampaignEmail,
   AdminNewCustomerNotificationEmail,
   AdminReviewSubmittedNotificationEmail,
   CustomerReviewRequestEmailTemplate,
@@ -460,7 +461,68 @@ export const sendAbandonedCheckoutRecoveryEmail = internalAction({
     scheduledDate: v.string(),
     scheduledTime: v.string(),
     serviceNames: v.array(v.string()),
-    resumeUrl: v.string(),
+    resumeToken: v.string(),
+    recoveryStage: v.union(v.literal("first"), v.literal("follow_up")),
+    membershipOffer: v.optional(
+      v.object({
+        planName: v.string(),
+        includedServiceName: v.string(),
+        oneTimePrice: v.optional(v.number()),
+        monthlyPrice: v.number(),
+        savingsPerVisit: v.optional(v.number()),
+        annualSavings: v.optional(v.number()),
+        kind: v.union(v.literal("replacement"), v.literal("after_detail")),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    if (shouldSkipEmails()) return;
+
+    const businessInfo = await getBusinessAndFromName(ctx);
+    if (!businessInfo) return;
+
+    const resumeUrl = `${siteUrl()}/booking/resume?token=${encodeURIComponent(
+      args.resumeToken,
+    )}&recovery=${args.recoveryStage === "first" ? "email1" : "email2"}`;
+    const html = await render(
+      AbandonedCheckoutRecoveryEmail({
+        customerName: args.customerName || "there",
+        businessName: businessInfo.business.name,
+        appointmentDate: args.scheduledDate,
+        appointmentTime: formatTime12h(args.scheduledTime),
+        services: args.serviceNames,
+        resumeUrl,
+        followUp: args.recoveryStage === "follow_up",
+        membershipOffer: args.membershipOffer,
+        logoUrl: logoUrl(),
+      }),
+    );
+
+    await sendEmailMessage(ctx, {
+      from: businessInfo.from,
+      to: args.to,
+      subject:
+        args.recoveryStage === "first"
+          ? `Finish your booking for ${args.scheduledDate}`
+          : `Your ${args.scheduledDate} booking is still saved`,
+      html,
+    });
+  },
+});
+
+export const sendMaintenanceClubCampaignEmail = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    planName: v.string(),
+    includedServiceName: v.string(),
+    vehicleLabel: v.optional(v.string()),
+    oneTimePrice: v.optional(v.number()),
+    monthlyPrice: v.number(),
+    savingsPerVisit: v.optional(v.number()),
+    annualSavings: v.optional(v.number()),
+    resumeToken: v.string(),
+    unsubscribeToken: v.string(),
   },
   handler: async (ctx, args) => {
     if (shouldSkipEmails()) return;
@@ -469,13 +531,22 @@ export const sendAbandonedCheckoutRecoveryEmail = internalAction({
     if (!businessInfo) return;
 
     const html = await render(
-      AbandonedCheckoutRecoveryEmail({
+      MaintenanceClubCampaignEmail({
         customerName: args.customerName || "there",
         businessName: businessInfo.business.name,
-        appointmentDate: args.scheduledDate,
-        appointmentTime: formatTime12h(args.scheduledTime),
-        services: args.serviceNames,
-        resumeUrl: args.resumeUrl,
+        planName: args.planName,
+        includedServiceName: args.includedServiceName,
+        vehicleLabel: args.vehicleLabel,
+        oneTimePrice: args.oneTimePrice,
+        monthlyPrice: args.monthlyPrice,
+        savingsPerVisit: args.savingsPerVisit,
+        annualSavings: args.annualSavings,
+        resumeUrl: `${siteUrl()}/booking/resume?token=${encodeURIComponent(
+          args.resumeToken,
+        )}&recovery=campaign`,
+        unsubscribeUrl: `${siteUrl()}/unsubscribe?token=${encodeURIComponent(
+          args.unsubscribeToken,
+        )}`,
         logoUrl: logoUrl(),
       }),
     );
@@ -483,7 +554,9 @@ export const sendAbandonedCheckoutRecoveryEmail = internalAction({
     await sendEmailMessage(ctx, {
       from: businessInfo.from,
       to: args.to,
-      subject: `Finish your booking for ${args.scheduledDate}`,
+      subject: `Keep your vehicle clean for $${args.monthlyPrice.toFixed(
+        0,
+      )}/month`,
       html,
     });
   },

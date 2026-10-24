@@ -347,6 +347,7 @@ async function cancelScheduledDraftJobs(
   draft: {
     holdExpiryScheduledId?: Id<"_scheduled_functions">;
     abandonedEmailScheduledId?: Id<"_scheduled_functions">;
+    abandonedFollowUpScheduledId?: Id<"_scheduled_functions">;
   },
 ) {
   if (draft.holdExpiryScheduledId) {
@@ -354,6 +355,24 @@ async function cancelScheduledDraftJobs(
   }
   if (draft.abandonedEmailScheduledId) {
     await ctx.scheduler.cancel(draft.abandonedEmailScheduledId);
+  }
+  if (draft.abandonedFollowUpScheduledId) {
+    await ctx.scheduler.cancel(draft.abandonedFollowUpScheduledId);
+  }
+}
+
+async function cancelHoldJob(
+  ctx: {
+    scheduler: {
+      cancel: (scheduledId: Id<"_scheduled_functions">) => Promise<void>;
+    };
+  },
+  draft: {
+    holdExpiryScheduledId?: Id<"_scheduled_functions">;
+  },
+) {
+  if (draft.holdExpiryScheduledId) {
+    await ctx.scheduler.cancel(draft.holdExpiryScheduledId);
   }
 }
 
@@ -956,6 +975,12 @@ export const createOrUpdateInternal = internalMutation({
         holdExpiresAt: undefined,
         holdExpiryScheduledId: undefined,
         abandonedEmailScheduledId: undefined,
+        abandonedFollowUpScheduledId: undefined,
+        abandonedEmailSentAt: undefined,
+        abandonedFollowUpSentAt: undefined,
+        recoveryClickedAt: undefined,
+        recoveryClickCount: undefined,
+        recoverySource: undefined,
         cancelledAt: undefined,
         expiredAt: undefined,
         completedAt: undefined,
@@ -1210,6 +1235,7 @@ export const markCheckoutOpenInternal = internalMutation({
     holdExpiresAt: v.number(),
     holdExpiryScheduledId: v.id("_scheduled_functions"),
     abandonedEmailScheduledId: v.id("_scheduled_functions"),
+    abandonedFollowUpScheduledId: v.id("_scheduled_functions"),
   },
   handler: async (ctx, args) => {
     const draft = await ctx.db.get(args.draftId);
@@ -1227,6 +1253,7 @@ export const markCheckoutOpenInternal = internalMutation({
       holdExpiresAt: args.holdExpiresAt,
       holdExpiryScheduledId: args.holdExpiryScheduledId,
       abandonedEmailScheduledId: args.abandonedEmailScheduledId,
+      abandonedFollowUpScheduledId: args.abandonedFollowUpScheduledId,
       cancelledAt: undefined,
       expiredAt: undefined,
       completedAt: undefined,
@@ -1275,6 +1302,7 @@ export const markCancelledInternal = internalMutation({
       cancelledAt: Date.now(),
       holdExpiryScheduledId: undefined,
       abandonedEmailScheduledId: undefined,
+      abandonedFollowUpScheduledId: undefined,
       holdExpiresAt: undefined,
       lastActivityAt: Date.now(),
     });
@@ -1293,12 +1321,11 @@ export const markExpiredInternal = internalMutation({
       return null;
     }
 
-    await cancelScheduledDraftJobs(ctx, draft);
+    await cancelHoldJob(ctx, draft);
     await ctx.db.patch(args.draftId, {
       status: "expired",
       expiredAt: Date.now(),
       holdExpiryScheduledId: undefined,
-      abandonedEmailScheduledId: undefined,
       holdExpiresAt: undefined,
       lastActivityAt: Date.now(),
     });
@@ -1319,9 +1346,43 @@ export const markAbandonedEmailSentInternal = internalMutation({
 
     await ctx.db.patch(args.draftId, {
       abandonedEmailSentAt: Date.now(),
+      abandonedEmailScheduledId: undefined,
       lastActivityAt: Date.now(),
     });
 
+    return null;
+  },
+});
+
+export const markAbandonedFollowUpSentInternal = internalMutation({
+  args: {
+    draftId: v.id("bookingDrafts"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.draftId, {
+      abandonedFollowUpSentAt: Date.now(),
+      abandonedFollowUpScheduledId: undefined,
+      lastActivityAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+export const trackRecoveryClick = mutation({
+  args: {
+    token: v.string(),
+    source: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const draft = await getDraftByToken(ctx, args.token);
+    if (!draft) return null;
+
+    await ctx.db.patch(draft._id, {
+      recoveryClickedAt: Date.now(),
+      recoveryClickCount: (draft.recoveryClickCount ?? 0) + 1,
+      recoverySource: args.source ?? draft.recoverySource,
+      lastActivityAt: Date.now(),
+    });
     return null;
   },
 });
@@ -1396,6 +1457,7 @@ export const convertSuccessfulCheckout = internalMutation({
       completedAt: Date.now(),
       holdExpiryScheduledId: undefined,
       abandonedEmailScheduledId: undefined,
+      abandonedFollowUpScheduledId: undefined,
       holdExpiresAt: undefined,
       lastActivityAt: Date.now(),
     });
@@ -1879,10 +1941,16 @@ export const listAbandonedForAdmin = query({
     await requireAdmin(ctx);
 
     const drafts = await ctx.db.query("bookingDrafts").collect();
+    const subscriptionPlans = (
+      await ctx.db
+        .query("services")
+        .withIndex("by_service_type", (q) => q.eq("serviceType", "subscription"))
+        .collect()
+    ).filter((service) => service.isActive);
     return await Promise.all(
       drafts
       .filter((draft) => {
-        if (draft.status === "draft") {
+        if (draft.status === "draft" || draft.status === "completed") {
           return false;
         }
         if (draft.status === "converted") {
@@ -1894,6 +1962,11 @@ export const listAbandonedForAdmin = query({
       .slice(0, 100)
       .map(async (draft) => {
         const services = await getServicesForDraft(ctx, draft.serviceIds);
+        const membershipPlan = subscriptionPlans.find((plan) =>
+          (plan.includedServiceIds ?? []).some((serviceId) =>
+            draft.serviceIds.includes(serviceId),
+          ),
+        );
         return {
         _id: draft._id,
         email: draft.customerEmail,
@@ -1907,9 +1980,21 @@ export const listAbandonedForAdmin = query({
         serviceNames: services.map((service) => service.name),
         resumeToken: draft.resumeToken,
         abandonedEmailSentAt: draft.abandonedEmailSentAt,
+        abandonedFollowUpSentAt: draft.abandonedFollowUpSentAt,
+        recoveryClickedAt: draft.recoveryClickedAt,
+        recoveryClickCount: draft.recoveryClickCount ?? 0,
+        recoverySource: draft.recoverySource,
         holdExpiresAt: draft.holdExpiresAt,
         lastActivityAt: draft.lastActivityAt,
         recovered: draft.status === "converted",
+        recoveredFromRecovery: Boolean(
+          draft.status === "converted" &&
+            draft.abandonedEmailSentAt &&
+            draft.convertedAt &&
+            draft.convertedAt > draft.abandonedEmailSentAt,
+        ),
+        membershipEligible: Boolean(membershipPlan),
+        membershipPlanName: membershipPlan?.name,
         };
       }),
     );

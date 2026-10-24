@@ -4,6 +4,8 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Abandoned Booking Recovery Campaigns**: Added a consent-aware membership campaign system with audience preview, test sends, batched delivery, per-recipient tracking, campaign history, and a public unsubscribe flow. The admin abandoned-checkout table now supports selection, service filtering, CSV export, per-row recovery sends, and bulk Maintenance Club offers.
+- **Campaign Scheduling**: Membership campaigns can be scheduled for the next 9:00 AM or a custom local time instead of sending immediately. A Convex cron checks every 5 minutes for due campaigns, and scheduled campaigns can be sent now or cancelled from the admin campaign history.
 - **Maintenance Club Booking Upsell**: Added a Maintenance Club step before checkout that replaces the one-time Maintenance Refresh with the member price, includes pet and travel fees in the recurring amount, hides the deposit option, saves the card, and starts the recurring Stripe membership on the next cycle while keeping the guest claim flow.
 - **Semi Vehicle Pricing**: Added a Semi vehicle type, heavy-truck make classification, and legacy-size pricing fallback so semi-specific services appear for Freightliner, Kenworth, Peterbilt, Mack, Western Star, International, Hino, and Scania vehicles while regular large-vehicle services remain available.
 - **Dashboard Subscription Filters**: Added All, Active, and Cancelled tabs to the customer dashboard subscriptions page, with per-tab counts and empty states so cancelled plans no longer mix with open subscriptions.
@@ -12,6 +14,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Abandoned Recovery Pipeline**: Send the first recovery email at 20 minutes and a follow-up at 24 hours, keep recovery jobs alive after a draft expires, use the public web origin for resume links, and track recovery sends, clicks, and conversions.
 - **Membership Checkout Label**: Show the membership plan name and first-month/recurring details on the Stripe Checkout line item instead of the generic "Full Service Payment" label.
 - **Booking Vehicle Reset**: Allow removing every vehicle entry, including the first, and add a Reset action that clears all entries and saved-vehicle selections; onboarding also allows clearing the first vehicle.
 - **Semi Pricing Exclusivity**: Require an exact Semi price row for typed vehicles so Semi no longer inherits every Truck-priced service; legacy-size fallback remains only for vehicles without a vehicle type.

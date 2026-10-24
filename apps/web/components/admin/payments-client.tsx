@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ColumnDef } from "@tanstack/react-table";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import type { Id } from "@rivercitymd/backend/convex/_generated/dataModel";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { DataTable } from "@/components/ui/data-table";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { formatDateString, formatTime12h } from "@/lib/time";
@@ -76,8 +77,15 @@ type AbandonedDraftRow = {
   scheduledTime: string;
   status: string;
   recovered?: boolean;
+  recoveredFromRecovery?: boolean;
   resumeToken: string;
   abandonedEmailSentAt?: number;
+  abandonedFollowUpSentAt?: number;
+  recoveryClickedAt?: number;
+  recoveryClickCount?: number;
+  recoverySource?: string;
+  membershipEligible?: boolean;
+  membershipPlanName?: string;
   lastActivityAt: number;
 };
 
@@ -218,6 +226,17 @@ function InvoiceModal({
   );
 }
 
+function getNextMorningTimestamp() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(9, 0, 0, 0);
+  if (next.getTime() <= now.getTime() + 5 * 60 * 1000) {
+    next.setDate(next.getDate() + 1);
+    next.setHours(9, 0, 0, 0);
+  }
+  return next.getTime();
+}
+
 export default function PaymentsClient() {
   const router = useRouter();
   const invoicesQuery = useQuery(api.invoices.listWithDetails, {});
@@ -227,10 +246,46 @@ export default function PaymentsClient() {
   const repairLegacyPendingBookings = useMutation(
     api.bookingDrafts.repairLegacyPendingBookings,
   );
+  const sendRecoveryForDraft = useAction(api.campaigns.sendRecoveryForDraft);
+  const startMembershipCampaign = useAction(
+    api.campaigns.startMembershipCampaign,
+  );
+  const sendMembershipCampaignTest = useAction(
+    api.campaigns.sendMembershipCampaignTest,
+  );
+  const sendCampaignNow = useAction(api.campaigns.sendCampaignNow);
+  const cancelCampaign = useMutation(api.campaigns.cancelCampaign);
+  const campaigns = useQuery(api.campaigns.listCampaigns, {});
 
   const [updatingId, setUpdatingId] = useState<Id<"invoices"> | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [repairingLegacy, setRepairingLegacy] = useState(false);
+  const [selectedDraftIds, setSelectedDraftIds] = useState<
+    Id<"bookingDrafts">[]
+  >([]);
+  const [serviceFilter, setServiceFilter] = useState("all");
+  const [campaignDialogOpen, setCampaignDialogOpen] = useState(false);
+  const [campaignName, setCampaignName] = useState(
+    "Maintenance Club — abandoned booking offer",
+  );
+  const [testEmail, setTestEmail] = useState("");
+  const [isSendingRecovery, setIsSendingRecovery] = useState<
+    Id<"bookingDrafts"> | null
+  >(null);
+  const [isStartingCampaign, setIsStartingCampaign] = useState(false);
+  const [sendTiming, setSendTiming] = useState<
+    "now" | "next_morning" | "custom"
+  >("next_morning");
+  const [customSendAt, setCustomSendAt] = useState("");
+  const [campaignActionId, setCampaignActionId] = useState<
+    Id<"emailCampaigns"> | null
+  >(null);
+  const campaignPreview = useQuery(
+    api.campaigns.previewAudience,
+    campaignDialogOpen && selectedDraftIds.length > 0
+      ? { audience: { draftIds: selectedDraftIds, statuses: ["expired"] } }
+      : "skip",
+  );
 
   if (invoicesQuery === undefined || statsQuery === undefined) {
     return (
@@ -297,6 +352,223 @@ export default function PaymentsClient() {
   const invoices = invoicesQuery as InvoiceRecord[];
   const stats = statsQuery;
   const abandonedItems = abandonedDrafts ?? [];
+  const serviceOptions = Array.from(
+    new Set(abandonedItems.flatMap((item) => item.serviceNames)),
+  ).sort();
+  const filteredAbandonedItems = abandonedItems.filter(
+    (item) =>
+      serviceFilter === "all" || item.serviceNames.includes(serviceFilter),
+  );
+  const allVisibleSelected =
+    filteredAbandonedItems.length > 0 &&
+    filteredAbandonedItems.every((item) =>
+      selectedDraftIds.includes(item._id),
+    );
+  const selectedVisibleDraftIds = filteredAbandonedItems
+    .filter((item) => selectedDraftIds.includes(item._id))
+    .map((item) => item._id);
+
+  const toggleDraftSelection = (draftId: Id<"bookingDrafts">) => {
+    setSelectedDraftIds((current) =>
+      current.includes(draftId)
+        ? current.filter((id) => id !== draftId)
+        : [...current, draftId],
+    );
+  };
+
+  const toggleAllVisible = () => {
+    if (allVisibleSelected) {
+      const visibleIds = new Set(filteredAbandonedItems.map((item) => item._id));
+      setSelectedDraftIds((current) =>
+        current.filter((id) => !visibleIds.has(id)),
+      );
+      return;
+    }
+    setSelectedDraftIds((current) => [
+      ...new Set([
+        ...current,
+        ...filteredAbandonedItems.map((item) => item._id),
+      ]),
+    ]);
+  };
+
+  const handleSendRecovery = async (draftId: Id<"bookingDrafts">) => {
+    setIsSendingRecovery(draftId);
+    try {
+      const sent = await sendRecoveryForDraft({ draftId });
+      toast.success(
+        sent
+          ? "Recovery email sent"
+          : "This draft already received a recovery email or is no longer eligible.",
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send recovery email",
+      );
+    } finally {
+      setIsSendingRecovery(null);
+    }
+  };
+
+  const handleExportCsv = () => {
+    const header = [
+      "Name",
+      "Email",
+      "Phone",
+      "Status",
+      "Services",
+      "Requested Date",
+      "Requested Time",
+      "Total",
+      "Last Activity",
+      "Recovery Email Sent",
+      "Follow-up Sent",
+      "Recovery Clicked",
+      "Membership Eligible",
+      "Resume Link",
+    ];
+    const rows = filteredAbandonedItems.map((item) => [
+      item.name,
+      item.email,
+      item.phone ?? "",
+      item.status,
+      item.serviceNames.join(" | "),
+      item.scheduledDate,
+      item.scheduledTime,
+      item.totalPrice?.toFixed(2) ?? "",
+      new Date(item.lastActivityAt).toISOString(),
+      item.abandonedEmailSentAt
+        ? new Date(item.abandonedEmailSentAt).toISOString()
+        : "",
+      item.abandonedFollowUpSentAt
+        ? new Date(item.abandonedFollowUpSentAt).toISOString()
+        : "",
+      item.recoveryClickedAt
+        ? new Date(item.recoveryClickedAt).toISOString()
+        : "",
+      item.membershipEligible ? "Yes" : "No",
+      `${window.location.origin}/booking/resume?token=${item.resumeToken}`,
+    ]);
+    const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => escape(String(cell))).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `abandoned-checkouts-${new Date()
+      .toISOString()
+      .slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSendTestCampaign = async () => {
+    if (!testEmail.trim()) {
+      toast.error("Enter an email address for the test.");
+      return;
+    }
+    try {
+      await sendMembershipCampaignTest({ to: testEmail.trim() });
+      toast.success("Test membership email sent");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to send test email",
+      );
+    }
+  };
+
+  const handleStartCampaign = async () => {
+    if (selectedVisibleDraftIds.length === 0) {
+      toast.error("Select at least one abandoned checkout.");
+      return;
+    }
+
+    let scheduledAt: number | undefined;
+    if (sendTiming === "next_morning") {
+      scheduledAt = getNextMorningTimestamp();
+    } else if (sendTiming === "custom") {
+      if (!customSendAt) {
+        toast.error("Choose a date and time.");
+        return;
+      }
+      scheduledAt = new Date(customSendAt).getTime();
+      if (
+        !Number.isFinite(scheduledAt) ||
+        scheduledAt <= Date.now() + 60_000
+      ) {
+        toast.error("Choose a time at least a minute in the future.");
+        return;
+      }
+    }
+
+    setIsStartingCampaign(true);
+    try {
+      const result = await startMembershipCampaign({
+        name: campaignName.trim() || "Maintenance Club campaign",
+        audience: { draftIds: selectedVisibleDraftIds, statuses: ["expired"] },
+        scheduledAt,
+      });
+      toast.success(
+        result.scheduledAt
+          ? `Campaign scheduled for ${new Date(
+              result.scheduledAt,
+            ).toLocaleString()}.`
+          : `Campaign started: ${result.eligible} eligible, ${result.skipped} skipped for consent.`,
+      );
+      setCampaignDialogOpen(false);
+      setSelectedDraftIds([]);
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to start campaign",
+      );
+    } finally {
+      setIsStartingCampaign(false);
+    }
+  };
+
+  const handleSendCampaignNow = async (
+    campaignId: Id<"emailCampaigns">,
+  ) => {
+    setCampaignActionId(campaignId);
+    try {
+      const started = await sendCampaignNow({ campaignId });
+      toast.success(
+        started
+          ? "Campaign started now."
+          : "This campaign is already sending or has finished.",
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to start campaign",
+      );
+    } finally {
+      setCampaignActionId(null);
+    }
+  };
+
+  const handleCancelCampaign = async (campaignId: Id<"emailCampaigns">) => {
+    setCampaignActionId(campaignId);
+    try {
+      const cancelled = await cancelCampaign({ campaignId });
+      toast.success(
+        cancelled
+          ? "Campaign cancelled."
+          : "This campaign could not be cancelled.",
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to cancel campaign",
+      );
+    } finally {
+      setCampaignActionId(null);
+    }
+  };
 
   const getStatusColor = (status: InvoiceStatus) => {
     switch (status) {
@@ -513,39 +785,99 @@ export default function PaymentsClient() {
 
       <Card>
         <CardContent className="space-y-4 pt-6">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h3 className="text-lg font-semibold">Abandoned Checkouts</h3>
               <p className="text-sm text-muted-foreground">
-                Drafts that never converted into live appointments stay here instead of clogging the schedule.
+                Expired checkout drafts and their recovery activity. Marketing
+                campaigns only include customers who opted in.
               </p>
             </div>
-            <Button variant="outline" onClick={handleLegacyCleanup} disabled={repairingLegacy}>
-              {repairingLegacy ? "Cleaning..." : "Clean legacy pending bookings"}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={serviceFilter}
+                onChange={(event) => {
+                  setServiceFilter(event.target.value);
+                  setSelectedDraftIds([]);
+                }}
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                aria-label="Filter abandoned checkouts by service"
+              >
+                <option value="all">All services</option>
+                {serviceOptions.map((serviceName) => (
+                  <option key={serviceName} value={serviceName}>
+                    {serviceName}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportCsv}
+                disabled={filteredAbandonedItems.length === 0}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export CSV
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCampaignDialogOpen(true)}
+                disabled={selectedVisibleDraftIds.length === 0}
+              >
+                <Send className="mr-2 h-4 w-4" />
+                Send membership offer
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleLegacyCleanup}
+                disabled={repairingLegacy}
+              >
+                {repairingLegacy ? "Cleaning..." : "Clean legacy pending"}
+              </Button>
+            </div>
           </div>
 
-          {abandonedItems.length === 0 ? (
+          {filteredAbandonedItems.length === 0 ? (
             <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
               No abandoned checkout drafts right now.
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
+              <table className="w-full min-w-[980px] text-sm">
                 <thead className="border-b text-left text-muted-foreground">
                   <tr>
+                    <th className="w-10 pb-3 pr-2 font-medium">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleAllVisible}
+                        aria-label="Select all visible abandoned checkouts"
+                        className="accent-primary"
+                      />
+                    </th>
                     <th className="pb-3 pr-4 font-medium">Customer</th>
                     <th className="pb-3 pr-4 font-medium">Services</th>
                     <th className="pb-3 pr-4 font-medium">Slot</th>
                     <th className="pb-3 pr-4 font-medium">Status</th>
-                    <th className="pb-3 pr-4 font-medium">Recovery Email</th>
+                    <th className="pb-3 pr-4 font-medium">Recovery</th>
                     <th className="pb-3 pr-4 font-medium">Last Activity</th>
                     <th className="pb-3 pr-4 font-medium">Reach Out</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {abandonedItems.map((draft: AbandonedDraftRow) => (
+                  {filteredAbandonedItems.map((draft: AbandonedDraftRow) => (
                     <tr key={draft._id} className="border-b last:border-b-0">
+                      <td className="py-3 pr-2 align-top">
+                        <input
+                          type="checkbox"
+                          checked={selectedDraftIds.includes(draft._id)}
+                          onChange={() => toggleDraftSelection(draft._id)}
+                          aria-label={`Select ${draft.name || draft.email}`}
+                          className="accent-primary"
+                        />
+                      </td>
                       <td className="py-3 pr-4">
                         <div className="font-medium">{draft.name}</div>
                         <div className="text-xs text-muted-foreground">{draft.email}</div>
@@ -562,21 +894,39 @@ export default function PaymentsClient() {
                           {formatTime12h(draft.scheduledTime)}
                         </div>
                       </td>
-                      <td className="py-3 pr-4">
+                      <td className="space-y-1 py-3 pr-4">
                         <Badge variant="outline">
-                          {draft.recovered ? "Recovered" : draft.status.replaceAll("_", " ")}
+                          {draft.recovered
+                            ? "Recovered"
+                            : draft.status.replaceAll("_", " ")}
                         </Badge>
+                        {draft.membershipEligible ? (
+                          <Badge variant="secondary">Club eligible</Badge>
+                        ) : null}
                       </td>
-                      <td className="py-3 pr-4 text-xs text-muted-foreground">
-                        {draft.abandonedEmailSentAt
-                          ? new Date(draft.abandonedEmailSentAt).toLocaleString()
-                          : "Not sent"}
+                      <td className="space-y-1 py-3 pr-4 text-xs text-muted-foreground">
+                        <div>
+                          {draft.abandonedEmailSentAt
+                            ? `Email 1: ${new Date(draft.abandonedEmailSentAt).toLocaleDateString()}`
+                            : "Email 1: not sent"}
+                        </div>
+                        <div>
+                          {draft.abandonedFollowUpSentAt
+                            ? `Follow-up: ${new Date(draft.abandonedFollowUpSentAt).toLocaleDateString()}`
+                            : "Follow-up: not sent"}
+                        </div>
+                        <div>
+                          {draft.recoveryClickCount
+                            ? `Clicks: ${draft.recoveryClickCount}`
+                            : "Clicks: 0"}
+                          {draft.recoveredFromRecovery ? " · recovered" : ""}
+                        </div>
                       </td>
                       <td className="py-3 pr-4 text-xs text-muted-foreground">
                         {new Date(draft.lastActivityAt).toLocaleString()}
                       </td>
                       <td className="py-3 pr-4">
-                        <div className="flex flex-col gap-2 sm:flex-row">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
                           <Button asChild size="sm" variant="outline">
                             <a href={`mailto:${draft.email}`}>Email</a>
                           </Button>
@@ -587,9 +937,29 @@ export default function PaymentsClient() {
                           ) : null}
                           {!draft.recovered ? (
                             <Button asChild size="sm" variant="outline">
-                              <a href={`/booking/resume?token=${draft.resumeToken}`}>Resume Link</a>
+                              <a href={`/booking/resume?token=${draft.resumeToken}`}>
+                                Resume Link
+                              </a>
                             </Button>
                           ) : null}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSendRecovery(draft._id)}
+                            disabled={
+                              Boolean(draft.abandonedEmailSentAt) ||
+                              Boolean(draft.recovered) ||
+                              isSendingRecovery === draft._id
+                            }
+                          >
+                            {isSendingRecovery === draft._id
+                              ? "Sending..."
+                              : draft.recovered
+                                ? "Recovered"
+                                : draft.abandonedEmailSentAt
+                                  ? "Email sent"
+                                  : "Send recovery"}
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -600,6 +970,239 @@ export default function PaymentsClient() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardContent className="space-y-3 pt-6">
+          <div>
+            <h3 className="text-lg font-semibold">Campaign History</h3>
+            <p className="text-sm text-muted-foreground">
+              Consent-aware membership offers, sent in batches with per-recipient
+              tracking.
+            </p>
+          </div>
+          {campaigns && campaigns.length > 0 ? (
+            <div className="divide-y rounded-lg border">
+              {campaigns.map((campaign) => (
+                <div
+                  key={campaign._id}
+                  className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div>
+                    <div className="text-sm font-medium">{campaign.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {new Date(campaign.createdAt).toLocaleString()} ·{" "}
+                      {campaign.templateKey}
+                    </div>
+                    {campaign.status === "scheduled" &&
+                    campaign.scheduledAt ? (
+                      <div className="text-xs font-medium">
+                        Scheduled for{" "}
+                        {new Date(campaign.scheduledAt).toLocaleString()}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Badge variant="outline">{campaign.status}</Badge>
+                    <span className="text-muted-foreground">
+                      Sent {campaign.sentCount}/{campaign.totalRecipients}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Skipped {campaign.skippedCount}
+                    </span>
+                    {campaign.failedCount > 0 ? (
+                      <span className="text-destructive">
+                        Failed {campaign.failedCount}
+                      </span>
+                    ) : null}
+                    {campaign.status === "scheduled" ? (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSendCampaignNow(campaign._id)}
+                          disabled={campaignActionId === campaign._id}
+                        >
+                          Send now
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleCancelCampaign(campaign._id)}
+                          disabled={campaignActionId === campaign._id}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : campaign.status === "sending" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCancelCampaign(campaign._id)}
+                        disabled={campaignActionId === campaign._id}
+                      >
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              No campaigns yet.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={campaignDialogOpen} onOpenChange={setCampaignDialogOpen}>
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Send Maintenance Club offer</DialogTitle>
+            <DialogDescription>
+              This is a marketing email. Only customers with an explicit
+              marketing opt-in and no suppression are eligible. Schedule it for
+              a sensible local time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="campaign-name">
+                Campaign name
+              </label>
+              <Input
+                id="campaign-name"
+                value={campaignName}
+                onChange={(event) => setCampaignName(event.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="text-sm font-medium"
+                htmlFor="campaign-send-timing"
+              >
+                Send time
+              </label>
+              <select
+                id="campaign-send-timing"
+                value={sendTiming}
+                onChange={(event) =>
+                  setSendTiming(
+                    event.target.value as "now" | "next_morning" | "custom",
+                  )
+                }
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="next_morning">Next 9:00 AM</option>
+                <option value="now">Send now</option>
+                <option value="custom">Choose a date &amp; time</option>
+              </select>
+              {sendTiming === "custom" ? (
+                <Input
+                  type="datetime-local"
+                  value={customSendAt}
+                  onChange={(event) => setCustomSendAt(event.target.value)}
+                />
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {sendTiming === "next_morning"
+                  ? `Will send ${new Date(
+                      getNextMorningTimestamp(),
+                    ).toLocaleString()}.`
+                  : sendTiming === "custom" && customSendAt
+                    ? `Will send ${new Date(customSendAt).toLocaleString()}.`
+                    : "Will send immediately."}{" "}
+                Times use your local timezone.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Selected</p>
+                <p className="text-xl font-semibold">
+                  {selectedVisibleDraftIds.length}
+                </p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Eligible</p>
+                <p className="text-xl font-semibold">
+                  {campaignPreview?.counts.eligible ?? "—"}
+                </p>
+              </div>
+              <div className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">Skipped</p>
+                <p className="text-xl font-semibold">
+                  {campaignPreview
+                    ? campaignPreview.counts.skippedNoConsent +
+                      campaignPreview.counts.skippedSuppressed +
+                      campaignPreview.counts.skippedNoEmail
+                    : "—"}
+                </p>
+              </div>
+            </div>
+
+            {campaignPreview ? (
+              <p className="text-xs text-muted-foreground">
+                {campaignPreview.counts.replacement} maintenance replacement
+                offer{campaignPreview.counts.replacement === 1 ? "" : "s"} ·{" "}
+                {campaignPreview.counts.afterDetail} post-detail offer
+                {campaignPreview.counts.afterDetail === 1 ? "" : "s"}.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Calculating audience...
+              </p>
+            )}
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                placeholder="you@example.com"
+                value={testEmail}
+                onChange={(event) => setTestEmail(event.target.value)}
+                type="email"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleSendTestCampaign}
+              >
+                Send test
+              </Button>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Preview the recovery and campaign designs with{" "}
+              <code>pnpm --filter web email:dev</code> before sending.
+            </p>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCampaignDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleStartCampaign}
+                disabled={
+                  isStartingCampaign ||
+                  !campaignPreview ||
+                  campaignPreview.counts.eligible === 0
+                }
+              >
+                {isStartingCampaign
+                  ? "Starting..."
+                  : sendTiming === "now"
+                    ? "Start campaign"
+                    : "Schedule campaign"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <DataTable
         columns={columns}

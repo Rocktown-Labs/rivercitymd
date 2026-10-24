@@ -15,6 +15,7 @@ import type * as availability from "../availability.js";
 import type * as bookingClaims from "../bookingClaims.js";
 import type * as bookingDrafts from "../bookingDrafts.js";
 import type * as business from "../business.js";
+import type * as campaigns from "../campaigns.js";
 import type * as chat from "../chat.js";
 import type * as crons from "../crons.js";
 import type * as debug from "../debug.js";
@@ -69,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   bookingClaims: typeof bookingClaims;
   bookingDrafts: typeof bookingDrafts;
   business: typeof business;
+  campaigns: typeof campaigns;
   chat: typeof chat;
   crons: typeof crons;
   debug: typeof debug;

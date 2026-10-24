@@ -16,6 +16,7 @@ import {
   Img,
   Font,
   Preview,
+  Link,
 } from "@react-email/components";
 
 // --- Brand Colors (hex for email compatibility) ---
@@ -192,11 +193,13 @@ function EmailLayout({
   preview,
   logoUrl,
   businessName,
+  footerNote,
   children,
 }: {
   preview: string;
   logoUrl?: string;
   businessName: string;
+  footerNote?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const logoSrc = logoUrl || "https://rivercitymd.com/BoldRiverCityMobileDetailingLogo.png";
@@ -240,6 +243,18 @@ function EmailLayout({
             <Text style={{ ...emailStyles.footerText, fontSize: "11px", color: "#6b6560" }}>
               &copy; {new Date().getFullYear()} {businessName}. All rights reserved.
             </Text>
+            {footerNote ? (
+              <Text
+                style={{
+                  ...emailStyles.footerText,
+                  fontSize: "11px",
+                  color: "#6b6560",
+                  marginTop: "8px",
+                }}
+              >
+                {footerNote}
+              </Text>
+            ) : null}
           </Section>
         </Container>
       </Body>
@@ -533,6 +548,16 @@ export interface AbandonedCheckoutRecoveryEmailProps {
   appointmentTime: string;
   services: string[];
   resumeUrl: string;
+  followUp?: boolean;
+  membershipOffer?: {
+    planName: string;
+    includedServiceName: string;
+    oneTimePrice?: number;
+    monthlyPrice: number;
+    savingsPerVisit?: number;
+    annualSavings?: number;
+    kind: "replacement" | "after_detail";
+  };
   logoUrl?: string;
 }
 
@@ -546,20 +571,57 @@ export function AbandonedCheckoutRecoveryEmail(
     appointmentTime,
     services,
     resumeUrl,
+    followUp = false,
+    membershipOffer,
     logoUrl,
   } = props;
 
+  const offerHeadline =
+    membershipOffer?.kind === "replacement" &&
+    membershipOffer.savingsPerVisit &&
+    membershipOffer.savingsPerVisit > 0
+      ? `Save $${membershipOffer.savingsPerVisit.toFixed(0)} every visit with ${membershipOffer.planName}`
+      : membershipOffer
+        ? `Keep it clean after your detail`
+        : null;
+
+  const offerBody =
+    membershipOffer?.kind === "replacement" &&
+    membershipOffer.oneTimePrice !== undefined &&
+    membershipOffer.savingsPerVisit &&
+    membershipOffer.savingsPerVisit > 0
+      ? `Your ${membershipOffer.includedServiceName} is $${membershipOffer.oneTimePrice.toFixed(
+          0,
+        )} per visit. ${membershipOffer.planName} is $${membershipOffer.monthlyPrice.toFixed(
+          0,
+        )}/month — that's $${(membershipOffer.annualSavings ?? membershipOffer.savingsPerVisit * 12).toFixed(
+          0,
+        )} saved per year.`
+      : membershipOffer
+        ? `The ${membershipOffer.planName} includes one ${membershipOffer.includedServiceName} each month for $${membershipOffer.monthlyPrice.toFixed(
+            0,
+          )}/month. It's the easiest way to keep your vehicle on a recurring schedule.`
+        : null;
+
   return (
     <EmailLayout
-      preview={`Finish your booking for ${appointmentDate} at ${appointmentTime}.`}
+      preview={
+        followUp
+          ? `Your ${appointmentDate} booking is still saved.`
+          : `Finish your booking for ${appointmentDate} at ${appointmentTime}.`
+      }
       logoUrl={logoUrl}
       businessName={businessName}
     >
-      <Heading style={emailStyles.heading}>Still thinking it over?</Heading>
+      <Heading style={emailStyles.heading}>
+        {followUp ? "Your booking is still saved" : "Still thinking it over?"}
+      </Heading>
       <Text style={emailStyles.text}>
         Hi {customerName}, we saved your booking details, but checkout was not
-        completed. Your original request is still available if you&apos;d like
-        to pick back up where you left off.
+        completed.{" "}
+        {followUp
+          ? "Your request is still available if you'd like to pick back up where you left off."
+          : "Your original request is still available if you'd like to pick back up where you left off."}
       </Text>
 
       <Section style={emailStyles.detailBox}>
@@ -573,6 +635,42 @@ export function AbandonedCheckoutRecoveryEmail(
         </ul>
       </Section>
 
+      {membershipOffer ? (
+        <Section
+          style={{
+            backgroundColor: "#f0f8fa",
+            border: "1px solid #cfe8ee",
+            borderRadius: "10px",
+            padding: "20px",
+            margin: "24px 0",
+          }}
+        >
+          <Text
+            style={{
+              ...emailStyles.text,
+              margin: "0 0 8px",
+              fontWeight: "600",
+              color: brand.textPrimary,
+            }}
+          >
+            {offerHeadline}
+          </Text>
+          <Text style={{ ...emailStyles.textBody, margin: "0" }}>
+            {offerBody}
+          </Text>
+          <Text
+            style={{
+              ...emailStyles.text,
+              margin: "12px 0 0",
+              fontSize: "12px",
+              color: brand.textMuted,
+            }}
+          >
+            Membership is optional. You can book your detail without it.
+          </Text>
+        </Section>
+      ) : null}
+
       <Text style={emailStyles.textBody}>
         Use the link below to finish checkout. If that time is no longer open,
         we&apos;ll bring your details back and help you choose a new slot.
@@ -580,9 +678,163 @@ export function AbandonedCheckoutRecoveryEmail(
 
       <Section style={{ textAlign: "center", marginBottom: "8px" }}>
         <Button href={resumeUrl} style={emailStyles.primaryButton}>
-          Resume Booking
+          {membershipOffer?.kind === "replacement"
+            ? "Resume Booking & See Savings"
+            : "Resume Booking"}
         </Button>
       </Section>
+    </EmailLayout>
+  );
+}
+
+// Maintenance Club marketing campaign email
+export interface MaintenanceClubCampaignEmailProps {
+  customerName: string;
+  businessName: string;
+  planName: string;
+  includedServiceName: string;
+  vehicleLabel?: string;
+  oneTimePrice?: number;
+  monthlyPrice: number;
+  savingsPerVisit?: number;
+  annualSavings?: number;
+  resumeUrl: string;
+  unsubscribeUrl: string;
+  logoUrl?: string;
+}
+
+export function MaintenanceClubCampaignEmail(
+  props: MaintenanceClubCampaignEmailProps,
+) {
+  const {
+    customerName,
+    businessName,
+    planName,
+    includedServiceName,
+    vehicleLabel,
+    oneTimePrice,
+    monthlyPrice,
+    savingsPerVisit,
+    annualSavings,
+    resumeUrl,
+    unsubscribeUrl,
+    logoUrl,
+  } = props;
+
+  const hasComparison =
+    oneTimePrice !== undefined &&
+    savingsPerVisit !== undefined &&
+    savingsPerVisit > 0;
+
+  return (
+    <EmailLayout
+      preview={`Keep your vehicle clean for $${monthlyPrice.toFixed(0)}/month with ${planName}.`}
+      logoUrl={logoUrl}
+      businessName={businessName}
+      footerNote={
+        <>
+          You&apos;re receiving this because you opted in to marketing emails.{" "}
+          <Link href={unsubscribeUrl} style={{ color: brand.textMuted }}>
+            Unsubscribe
+          </Link>
+          .
+        </>
+      }
+    >
+      <Heading style={emailStyles.heading}>
+        Your vehicle stays clean. Your price stays lower.
+      </Heading>
+      <Text style={emailStyles.text}>
+        Hi {customerName}, you started a booking
+        {vehicleLabel ? ` for your ${vehicleLabel}` : ""} but didn&apos;t finish.
+        Before you rebook, here&apos;s a simpler way to keep it on a recurring
+        schedule.
+      </Text>
+
+      <Section
+        style={{
+          backgroundColor: "#f0f8fa",
+          border: "1px solid #cfe8ee",
+          borderRadius: "12px",
+          padding: "24px",
+          margin: "24px 0",
+          textAlign: "center",
+        }}
+      >
+        <Text
+          style={{
+            ...emailStyles.text,
+            margin: "0 0 4px",
+            fontSize: "12px",
+            letterSpacing: "1.5px",
+            textTransform: "uppercase",
+            color: brand.tealDark,
+            fontWeight: "600",
+          }}
+        >
+          {planName}
+        </Text>
+        <Text
+          style={{
+            ...emailStyles.heading,
+            fontSize: "38px",
+            margin: "0",
+            lineHeight: "1.1",
+          }}
+        >
+          ${monthlyPrice.toFixed(0)}
+          <span style={{ fontSize: "16px", color: brand.textMuted }}>
+            {" "}
+            / month
+          </span>
+        </Text>
+        <Text style={{ ...emailStyles.textBody, margin: "8px 0 0" }}>
+          Includes one {includedServiceName} each month.
+        </Text>
+      </Section>
+
+      {hasComparison ? (
+        <Section style={emailStyles.detailBox}>
+          <DetailField
+            label="One-time price"
+            value={`$${oneTimePrice.toFixed(0)} per visit`}
+          />
+          <DetailField
+            label="Member price"
+            value={`$${monthlyPrice.toFixed(0)} per month`}
+          />
+          <DetailField
+            label="You save"
+            value={`$${savingsPerVisit.toFixed(0)} per visit${
+              annualSavings
+                ? ` — $${annualSavings.toFixed(0)} per year`
+                : ""
+            }`}
+          />
+        </Section>
+      ) : null}
+
+      <Text style={emailStyles.textBody}>
+        Member pricing, a recurring schedule you don&apos;t have to remember,
+        and the same detail you already know. Cancel anytime.
+      </Text>
+
+      <Section style={{ textAlign: "center", marginBottom: "8px" }}>
+        <Button href={resumeUrl} style={emailStyles.primaryButton}>
+          Resume Booking &amp; Join the Club
+        </Button>
+      </Section>
+
+      <Text
+        style={{
+          ...emailStyles.text,
+          textAlign: "center",
+          fontSize: "12px",
+          color: brand.textMuted,
+        }}
+      >
+        Prefer to book one-time? You can still resume your original booking.
+      </Text>
     </EmailLayout>
   );
 }
