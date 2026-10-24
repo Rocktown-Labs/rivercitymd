@@ -12,6 +12,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getUserIdFromIdentity, requireAdmin } from "./auth";
 import { getEffectiveServicePricingForVehicle } from "./lib/pricing";
 import { normalizeUserNotificationPreferences } from "./lib/notificationSettings";
+import { getCentralHour, getNextNineAmCentral } from "./lib/scheduling";
 
 const campaignAudienceValidator = v.object({
   draftIds: v.optional(v.array(v.id("bookingDrafts"))),
@@ -356,6 +357,148 @@ export const previewAudience = query({
         savingsPerVisit: candidate.metadata.savingsPerVisit,
         membershipKind: candidate.metadata.membershipKind,
       })),
+    };
+  },
+});
+
+export const findMaintenanceRefreshRecoveryCandidatesInternal = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<{
+    candidates: Array<{
+      draftId: Id<"bookingDrafts">;
+      email: string;
+      name: string;
+      lastActivityAt: number;
+    }>;
+  }> => {
+    const services = await ctx.db.query("services").collect();
+    const maintenanceServiceIds = new Set(
+      services
+        .filter(
+          (service) =>
+            service.isActive &&
+            service.name.toLowerCase().includes("maintenance refresh"),
+        )
+        .map((service) => service._id),
+    );
+    if (maintenanceServiceIds.size === 0) {
+      return { candidates: [] };
+    }
+
+    const drafts = await ctx.db.query("bookingDrafts").collect();
+    const candidates = drafts
+      .filter(
+        (draft) =>
+          draft.status === "expired" &&
+          !draft.abandonedEmailSentAt &&
+          !draft.abandonedEmailScheduledId &&
+          !draft.abandonedFollowUpScheduledId &&
+          Boolean(draft.customerEmail) &&
+          draft.serviceIds.some((serviceId) =>
+            maintenanceServiceIds.has(serviceId),
+          ),
+      )
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+
+    const byEmail = new Map<string, Doc<"bookingDrafts">>();
+    for (const draft of candidates) {
+      const email = draft.customerEmail.trim().toLowerCase();
+      if (!byEmail.has(email)) {
+        byEmail.set(email, draft);
+      }
+    }
+
+    return {
+      candidates: [...byEmail.values()].map((draft) => ({
+        draftId: draft._id,
+        email: draft.customerEmail,
+        name: draft.customerName,
+        lastActivityAt: draft.lastActivityAt,
+      })),
+    };
+  },
+});
+
+export const markRecoveryBackfillScheduledInternal = internalMutation({
+  args: {
+    draftId: v.id("bookingDrafts"),
+    abandonedEmailScheduledId: v.id("_scheduled_functions"),
+    abandonedFollowUpScheduledId: v.id("_scheduled_functions"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.draftId, {
+      abandonedEmailScheduledId: args.abandonedEmailScheduledId,
+      abandonedFollowUpScheduledId: args.abandonedFollowUpScheduledId,
+    });
+  },
+});
+
+export const enqueueMaintenanceRefreshRecovery = internalAction({
+  args: { force: v.optional(v.boolean()) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    skipped: boolean;
+    count: number;
+    recipients: string[];
+    firstSendAt: number | null;
+    followUpSendAt: number | null;
+  }> => {
+    if (!args.force && getCentralHour() !== 8) {
+      return {
+        skipped: true,
+        count: 0,
+        recipients: [],
+        firstSendAt: null,
+        followUpSendAt: null,
+      };
+    }
+
+    const result = await ctx.runQuery(
+      internal.campaigns.findMaintenanceRefreshRecoveryCandidatesInternal,
+      {},
+    );
+    if (result.candidates.length === 0) {
+      return {
+        skipped: false,
+        count: 0,
+        recipients: [],
+        firstSendAt: null,
+        followUpSendAt: null,
+      };
+    }
+
+    const firstSendAt = getNextNineAmCentral();
+    const followUpSendAt = firstSendAt + 24 * 60 * 60 * 1000;
+
+    for (const candidate of result.candidates) {
+      const abandonedEmailScheduledId = await ctx.scheduler.runAt(
+        firstSendAt,
+        internal.payments.sendAbandonedBookingRecoveryEmail,
+        { draftId: candidate.draftId, stage: "first" },
+      );
+      const abandonedFollowUpScheduledId = await ctx.scheduler.runAt(
+        followUpSendAt,
+        internal.payments.sendAbandonedBookingRecoveryEmail,
+        { draftId: candidate.draftId, stage: "follow_up" },
+      );
+      await ctx.runMutation(
+        internal.campaigns.markRecoveryBackfillScheduledInternal,
+        {
+          draftId: candidate.draftId,
+          abandonedEmailScheduledId,
+          abandonedFollowUpScheduledId,
+        },
+      );
+    }
+
+    return {
+      skipped: false,
+      count: result.candidates.length,
+      recipients: result.candidates.map((candidate) => candidate.email),
+      firstSendAt,
+      followUpSendAt,
     };
   },
 });

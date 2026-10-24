@@ -291,4 +291,32 @@ describe("membership campaign audience", () => {
     expect(sendingCampaign?.status).toBe("sending");
     expect(sendingCampaign?.startedAt).toBeTypeOf("number");
   });
+
+  test("dedupes Maintenance Refresh recovery candidates by email", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+    const { maintenanceServiceId } = await seedServices(t);
+
+    await createExpiredDraft(t, {
+      email: "repeat@example.com",
+      maintenanceServiceId,
+    });
+    await createExpiredDraft(t, {
+      email: "repeat@example.com",
+      maintenanceServiceId,
+    });
+    await createExpiredDraft(t, {
+      email: "unique@example.com",
+      maintenanceServiceId,
+    });
+
+    const result = await t.query(
+      internal.campaigns.findMaintenanceRefreshRecoveryCandidatesInternal,
+      {},
+    );
+    expect(result.candidates).toHaveLength(2);
+    expect(
+      result.candidates.map((candidate) => candidate.email).sort(),
+    ).toEqual(["repeat@example.com", "unique@example.com"]);
+  });
 });

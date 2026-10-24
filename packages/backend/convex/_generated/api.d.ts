@@ -32,6 +32,7 @@ import type * as lib_invoices from "../lib/invoices.js";
 import type * as lib_notificationMessages from "../lib/notificationMessages.js";
 import type * as lib_notificationSettings from "../lib/notificationSettings.js";
 import type * as lib_pricing from "../lib/pricing.js";
+import type * as lib_scheduling from "../lib/scheduling.js";
 import type * as lib_time from "../lib/time.js";
 import type * as lib_travelFees from "../lib/travelFees.js";
 import type * as notifications from "../notifications.js";
@@ -87,6 +88,7 @@ declare const fullApi: ApiFromModules<{
   "lib/notificationMessages": typeof lib_notificationMessages;
   "lib/notificationSettings": typeof lib_notificationSettings;
   "lib/pricing": typeof lib_pricing;
+  "lib/scheduling": typeof lib_scheduling;
   "lib/time": typeof lib_time;
   "lib/travelFees": typeof lib_travelFees;
   notifications: typeof notifications;
