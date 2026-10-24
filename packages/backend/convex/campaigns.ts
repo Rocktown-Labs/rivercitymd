@@ -583,6 +583,73 @@ export const enqueueMaintenanceRefreshRecovery = internalAction({
   },
 });
 
+export const enqueueRecoveryForDraftsInternal = internalAction({
+  args: { draftIds: v.array(v.id("bookingDrafts")) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    queued: Array<{ draftId: Id<"bookingDrafts">; email: string }>;
+    skipped: Array<{ draftId: Id<"bookingDrafts">; reason: string }>;
+    firstSendAt: number;
+    followUpSendAt: number;
+  }> => {
+    const firstSendAt = getNextNineAmCentral();
+    const followUpSendAt = firstSendAt + 24 * 60 * 60 * 1000;
+    const queued: Array<{ draftId: Id<"bookingDrafts">; email: string }> = [];
+    const skipped: Array<{ draftId: Id<"bookingDrafts">; reason: string }> =
+      [];
+
+    for (const draftId of args.draftIds) {
+      const draft = await ctx.runQuery(
+        internal.bookingDrafts.getByIdInternal,
+        { draftId },
+      );
+      if (!draft) {
+        skipped.push({ draftId, reason: "not_found" });
+        continue;
+      }
+      if (draft.status !== "expired") {
+        skipped.push({ draftId, reason: "not_expired" });
+        continue;
+      }
+      if (draft.abandonedEmailSentAt) {
+        skipped.push({ draftId, reason: "already_sent" });
+        continue;
+      }
+      if (
+        draft.abandonedEmailScheduledId ||
+        draft.abandonedFollowUpScheduledId
+      ) {
+        skipped.push({ draftId, reason: "already_scheduled" });
+        continue;
+      }
+
+      const abandonedEmailScheduledId = await ctx.scheduler.runAt(
+        firstSendAt,
+        internal.payments.sendAbandonedBookingRecoveryEmail,
+        { draftId, stage: "first" },
+      );
+      const abandonedFollowUpScheduledId = await ctx.scheduler.runAt(
+        followUpSendAt,
+        internal.payments.sendAbandonedBookingRecoveryEmail,
+        { draftId, stage: "follow_up" },
+      );
+      await ctx.runMutation(
+        internal.campaigns.markRecoveryBackfillScheduledInternal,
+        {
+          draftId,
+          abandonedEmailScheduledId,
+          abandonedFollowUpScheduledId,
+        },
+      );
+      queued.push({ draftId, email: draft.customerEmail });
+    }
+
+    return { queued, skipped, firstSendAt, followUpSendAt };
+  },
+});
+
 export const createCampaignInternal = internalMutation({
   args: {
     name: v.string(),

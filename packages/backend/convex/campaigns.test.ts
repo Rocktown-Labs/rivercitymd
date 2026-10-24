@@ -400,4 +400,27 @@ describe("membership campaign audience", () => {
       result.candidates.map((candidate) => candidate.email).sort(),
     ).toEqual(["camstewart7@gmail.com", "new-customer@example.com"]);
   });
+
+  test("queues recovery for specific drafts", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+    const { maintenanceServiceId } = await seedServices(t);
+    const draftId = await createExpiredDraft(t, {
+      email: "specific@example.com",
+      maintenanceServiceId,
+    });
+
+    const result = await t.action(
+      internal.campaigns.enqueueRecoveryForDraftsInternal,
+      { draftIds: [draftId] },
+    );
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued[0]?.draftId).toBe(draftId);
+
+    const draft = await t.run(async (ctx) => {
+      return await ctx.db.get(draftId);
+    });
+    expect(draft?.abandonedEmailScheduledId).toBeTypeOf("string");
+    expect(draft?.abandonedFollowUpScheduledId).toBeTypeOf("string");
+  });
 });
