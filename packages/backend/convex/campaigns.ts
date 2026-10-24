@@ -365,6 +365,10 @@ export const createCampaignInternal = internalMutation({
     name: v.string(),
     audience: campaignAudienceValidator,
     createdBy: v.id("users"),
+    scheduledAt: v.optional(v.number()),
+    status: v.optional(
+      v.union(v.literal("scheduled"), v.literal("sending")),
+    ),
     candidates: v.array(
       v.object({
         draftId: v.id("bookingDrafts"),
@@ -391,11 +395,12 @@ export const createCampaignInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const status = args.status ?? "sending";
     const skipped = args.candidates.filter((candidate) => !candidate.consent);
     const campaignId = await ctx.db.insert("emailCampaigns", {
       name: args.name,
       type: "membership_offer",
-      status: "sending",
+      status,
       templateKey: "maintenance_club_offer",
       subject: "Keep your vehicle clean for less",
       audience: args.audience,
@@ -405,7 +410,8 @@ export const createCampaignInternal = internalMutation({
       skippedCount: skipped.length,
       createdBy: args.createdBy,
       createdAt: now,
-      startedAt: now,
+      scheduledAt: args.scheduledAt,
+      startedAt: status === "sending" ? now : undefined,
     });
 
     for (const candidate of args.candidates) {
@@ -428,6 +434,7 @@ export const createCampaignInternal = internalMutation({
       totalRecipients: args.candidates.length,
       eligible: args.candidates.length - skipped.length,
       skipped: skipped.length,
+      scheduledAt: args.scheduledAt,
     };
   },
 });
@@ -436,16 +443,24 @@ export const startMembershipCampaign = action({
   args: {
     name: v.string(),
     audience: campaignAudienceValidator,
+    scheduledAt: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{
     campaignId: Id<"emailCampaigns">;
     totalRecipients: number;
     eligible: number;
     skipped: number;
+    scheduledAt?: number;
   }> => {
     await requireAdmin(ctx);
     const createdBy = await getUserIdFromIdentity(ctx);
     if (!createdBy) throw new Error("Not authenticated");
+
+    const now = Date.now();
+    const scheduledAt =
+      args.scheduledAt && args.scheduledAt > now + 60_000
+        ? args.scheduledAt
+        : undefined;
 
     const resolved = await ctx.runQuery(
       internal.campaigns.resolveAudienceInternal,
@@ -464,14 +479,18 @@ export const startMembershipCampaign = action({
         audience: args.audience,
         createdBy,
         candidates: resolved.candidates,
+        scheduledAt,
+        status: scheduledAt ? "scheduled" : "sending",
       },
     );
 
-    await ctx.scheduler.runAfter(
-      0,
-      internal.campaigns.processCampaignBatch,
-      { campaignId: campaign.campaignId },
-    );
+    if (!scheduledAt) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.campaigns.processCampaignBatch,
+        { campaignId: campaign.campaignId },
+      );
+    }
 
     return campaign;
   },
@@ -481,6 +500,103 @@ export const getCampaignInternal = internalQuery({
   args: { campaignId: v.id("emailCampaigns") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.campaignId);
+  },
+});
+
+export const claimDueCampaignsInternal = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<Id<"emailCampaigns">[]> => {
+    const now = Date.now();
+    const scheduled = await ctx.db
+      .query("emailCampaigns")
+      .withIndex("by_status", (q) => q.eq("status", "scheduled"))
+      .take(50);
+    const due = scheduled.filter(
+      (campaign) =>
+        campaign.scheduledAt !== undefined && campaign.scheduledAt <= now,
+    );
+
+    for (const campaign of due) {
+      await ctx.db.patch(campaign._id, {
+        status: "sending",
+        startedAt: now,
+      });
+    }
+
+    return due.map((campaign) => campaign._id);
+  },
+});
+
+export const processDueCampaigns = internalAction({
+  args: {},
+  handler: async (ctx): Promise<null> => {
+    const campaignIds = await ctx.runMutation(
+      internal.campaigns.claimDueCampaignsInternal,
+      {},
+    );
+    for (const campaignId of campaignIds) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.campaigns.processCampaignBatch,
+        { campaignId },
+      );
+    }
+    return null;
+  },
+});
+
+export const claimCampaignNowInternal = internalMutation({
+  args: { campaignId: v.id("emailCampaigns") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return false;
+    if (campaign.status === "sent" || campaign.status === "cancelled") {
+      return false;
+    }
+    if (campaign.status === "sending") return false;
+
+    await ctx.db.patch(args.campaignId, {
+      status: "sending",
+      startedAt: Date.now(),
+    });
+    return true;
+  },
+});
+
+export const sendCampaignNow = action({
+  args: { campaignId: v.id("emailCampaigns") },
+  handler: async (ctx, args): Promise<boolean> => {
+    await requireAdmin(ctx);
+    const claimed = await ctx.runMutation(
+      internal.campaigns.claimCampaignNowInternal,
+      { campaignId: args.campaignId },
+    );
+    if (!claimed) return false;
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.campaigns.processCampaignBatch,
+      { campaignId: args.campaignId },
+    );
+    return true;
+  },
+});
+
+export const cancelCampaign = mutation({
+  args: { campaignId: v.id("emailCampaigns") },
+  handler: async (ctx, args): Promise<boolean> => {
+    await requireAdmin(ctx);
+    const campaign = await ctx.db.get(args.campaignId);
+    if (!campaign) return false;
+    if (campaign.status === "sent" || campaign.status === "cancelled") {
+      return false;
+    }
+
+    await ctx.db.patch(args.campaignId, {
+      status: "cancelled",
+      completedAt: Date.now(),
+    });
+    return true;
   },
 });
 
@@ -597,11 +713,27 @@ export const processCampaignBatch = internalAction({
       internal.campaigns.getCampaignInternal,
       { campaignId: args.campaignId },
     );
-    if (!campaign || campaign.status === "cancelled") return null;
+    if (
+      !campaign ||
+      campaign.status === "cancelled" ||
+      campaign.status === "sent"
+    ) {
+      return null;
+    }
+    if (campaign.status === "scheduled") {
+      if (campaign.scheduledAt && campaign.scheduledAt > Date.now()) {
+        return null;
+      }
+      const claimed = await ctx.runMutation(
+        internal.campaigns.claimCampaignNowInternal,
+        { campaignId: args.campaignId },
+      );
+      if (!claimed) return null;
+    }
 
     const recipients = await ctx.runQuery(
       internal.campaigns.getPendingRecipientsInternal,
-      { campaignId: args.campaignId, limit: 10 },
+      { campaignId: args.campaignId, limit: 2 },
     );
 
     for (const recipient of recipients) {

@@ -1,10 +1,17 @@
 import { cronJobs } from "convex/server";
-import { components } from "./_generated/api.js";
+import { components, internal } from "./_generated/api.js";
 import { internalMutation } from "./_generated/server.js";
 
 const crons = cronJobs();
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+crons.interval(
+  "process-scheduled-email-campaigns",
+  { minutes: 5 },
+  internal.campaigns.processDueCampaigns,
+  {},
+);
 
 export const cleanupResend = internalMutation({
   args: {},

@@ -226,6 +226,17 @@ function InvoiceModal({
   );
 }
 
+function getNextMorningTimestamp() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(9, 0, 0, 0);
+  if (next.getTime() <= now.getTime() + 5 * 60 * 1000) {
+    next.setDate(next.getDate() + 1);
+    next.setHours(9, 0, 0, 0);
+  }
+  return next.getTime();
+}
+
 export default function PaymentsClient() {
   const router = useRouter();
   const invoicesQuery = useQuery(api.invoices.listWithDetails, {});
@@ -242,6 +253,8 @@ export default function PaymentsClient() {
   const sendMembershipCampaignTest = useAction(
     api.campaigns.sendMembershipCampaignTest,
   );
+  const sendCampaignNow = useAction(api.campaigns.sendCampaignNow);
+  const cancelCampaign = useMutation(api.campaigns.cancelCampaign);
   const campaigns = useQuery(api.campaigns.listCampaigns, {});
 
   const [updatingId, setUpdatingId] = useState<Id<"invoices"> | null>(null);
@@ -260,6 +273,13 @@ export default function PaymentsClient() {
     Id<"bookingDrafts"> | null
   >(null);
   const [isStartingCampaign, setIsStartingCampaign] = useState(false);
+  const [sendTiming, setSendTiming] = useState<
+    "now" | "next_morning" | "custom"
+  >("next_morning");
+  const [customSendAt, setCustomSendAt] = useState("");
+  const [campaignActionId, setCampaignActionId] = useState<
+    Id<"emailCampaigns"> | null
+  >(null);
   const campaignPreview = useQuery(
     api.campaigns.previewAudience,
     campaignDialogOpen && selectedDraftIds.length > 0
@@ -465,14 +485,38 @@ export default function PaymentsClient() {
       toast.error("Select at least one abandoned checkout.");
       return;
     }
+
+    let scheduledAt: number | undefined;
+    if (sendTiming === "next_morning") {
+      scheduledAt = getNextMorningTimestamp();
+    } else if (sendTiming === "custom") {
+      if (!customSendAt) {
+        toast.error("Choose a date and time.");
+        return;
+      }
+      scheduledAt = new Date(customSendAt).getTime();
+      if (
+        !Number.isFinite(scheduledAt) ||
+        scheduledAt <= Date.now() + 60_000
+      ) {
+        toast.error("Choose a time at least a minute in the future.");
+        return;
+      }
+    }
+
     setIsStartingCampaign(true);
     try {
       const result = await startMembershipCampaign({
         name: campaignName.trim() || "Maintenance Club campaign",
         audience: { draftIds: selectedVisibleDraftIds, statuses: ["expired"] },
+        scheduledAt,
       });
       toast.success(
-        `Campaign started: ${result.eligible} eligible, ${result.skipped} skipped for consent.`,
+        result.scheduledAt
+          ? `Campaign scheduled for ${new Date(
+              result.scheduledAt,
+            ).toLocaleString()}.`
+          : `Campaign started: ${result.eligible} eligible, ${result.skipped} skipped for consent.`,
       );
       setCampaignDialogOpen(false);
       setSelectedDraftIds([]);
@@ -483,6 +527,46 @@ export default function PaymentsClient() {
       );
     } finally {
       setIsStartingCampaign(false);
+    }
+  };
+
+  const handleSendCampaignNow = async (
+    campaignId: Id<"emailCampaigns">,
+  ) => {
+    setCampaignActionId(campaignId);
+    try {
+      const started = await sendCampaignNow({ campaignId });
+      toast.success(
+        started
+          ? "Campaign started now."
+          : "This campaign is already sending or has finished.",
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to start campaign",
+      );
+    } finally {
+      setCampaignActionId(null);
+    }
+  };
+
+  const handleCancelCampaign = async (campaignId: Id<"emailCampaigns">) => {
+    setCampaignActionId(campaignId);
+    try {
+      const cancelled = await cancelCampaign({ campaignId });
+      toast.success(
+        cancelled
+          ? "Campaign cancelled."
+          : "This campaign could not be cancelled.",
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to cancel campaign",
+      );
+    } finally {
+      setCampaignActionId(null);
     }
   };
 
@@ -909,6 +993,13 @@ export default function PaymentsClient() {
                       {new Date(campaign.createdAt).toLocaleString()} ·{" "}
                       {campaign.templateKey}
                     </div>
+                    {campaign.status === "scheduled" &&
+                    campaign.scheduledAt ? (
+                      <div className="text-xs font-medium">
+                        Scheduled for{" "}
+                        {new Date(campaign.scheduledAt).toLocaleString()}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <Badge variant="outline">{campaign.status}</Badge>
@@ -922,6 +1013,35 @@ export default function PaymentsClient() {
                       <span className="text-destructive">
                         Failed {campaign.failedCount}
                       </span>
+                    ) : null}
+                    {campaign.status === "scheduled" ? (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleSendCampaignNow(campaign._id)}
+                          disabled={campaignActionId === campaign._id}
+                        >
+                          Send now
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleCancelCampaign(campaign._id)}
+                          disabled={campaignActionId === campaign._id}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : campaign.status === "sending" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCancelCampaign(campaign._id)}
+                        disabled={campaignActionId === campaign._id}
+                      >
+                        Cancel
+                      </Button>
                     ) : null}
                   </div>
                 </div>
@@ -941,7 +1061,8 @@ export default function PaymentsClient() {
             <DialogTitle>Send Maintenance Club offer</DialogTitle>
             <DialogDescription>
               This is a marketing email. Only customers with an explicit
-              marketing opt-in and no suppression are eligible.
+              marketing opt-in and no suppression are eligible. Schedule it for
+              a sensible local time.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -954,6 +1075,46 @@ export default function PaymentsClient() {
                 value={campaignName}
                 onChange={(event) => setCampaignName(event.target.value)}
               />
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="text-sm font-medium"
+                htmlFor="campaign-send-timing"
+              >
+                Send time
+              </label>
+              <select
+                id="campaign-send-timing"
+                value={sendTiming}
+                onChange={(event) =>
+                  setSendTiming(
+                    event.target.value as "now" | "next_morning" | "custom",
+                  )
+                }
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="next_morning">Next 9:00 AM</option>
+                <option value="now">Send now</option>
+                <option value="custom">Choose a date &amp; time</option>
+              </select>
+              {sendTiming === "custom" ? (
+                <Input
+                  type="datetime-local"
+                  value={customSendAt}
+                  onChange={(event) => setCustomSendAt(event.target.value)}
+                />
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {sendTiming === "next_morning"
+                  ? `Will send ${new Date(
+                      getNextMorningTimestamp(),
+                    ).toLocaleString()}.`
+                  : sendTiming === "custom" && customSendAt
+                    ? `Will send ${new Date(customSendAt).toLocaleString()}.`
+                    : "Will send immediately."}{" "}
+                Times use your local timezone.
+              </p>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -1032,7 +1193,11 @@ export default function PaymentsClient() {
                   campaignPreview.counts.eligible === 0
                 }
               >
-                {isStartingCampaign ? "Starting..." : "Start campaign"}
+                {isStartingCampaign
+                  ? "Starting..."
+                  : sendTiming === "now"
+                    ? "Start campaign"
+                    : "Schedule campaign"}
               </Button>
             </div>
           </div>

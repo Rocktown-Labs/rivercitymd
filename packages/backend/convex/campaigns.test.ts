@@ -213,4 +213,82 @@ describe("membership campaign audience", () => {
     });
     expect(suppression?.reason).toBe("unsubscribe");
   });
+
+  test("schedules campaigns and claims them when due", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+    const { maintenanceServiceId } = await seedServices(t);
+
+    const adminId = await t.run(async (ctx) => {
+      return await ctx.db.insert("users", {
+        name: "Scheduler Admin",
+        email: "scheduler-admin@example.com",
+        role: "admin",
+      });
+    });
+    const draftId = await createExpiredDraft(t, {
+      email: "scheduled@example.com",
+      maintenanceServiceId,
+    });
+
+    const future = Date.now() + 60 * 60 * 1000;
+    const campaign = await t.mutation(
+      internal.campaigns.createCampaignInternal,
+      {
+        name: "Scheduled campaign",
+        audience: { statuses: ["expired"] },
+        createdBy: adminId,
+        scheduledAt: future,
+        status: "scheduled",
+        candidates: [
+          {
+            draftId,
+            email: "scheduled@example.com",
+            name: "Scheduled",
+            consent: true,
+            metadata: {
+              planName: "River City Maintenance Club",
+              includedServiceName: "Maintenance Refresh",
+              monthlyPrice: 145,
+              oneTimePrice: 175,
+              savingsPerVisit: 30,
+              annualSavings: 360,
+              membershipKind: "replacement" as const,
+            },
+          },
+        ],
+      },
+    );
+    expect(campaign.scheduledAt).toBe(future);
+
+    const scheduledCampaign = await t.run(async (ctx) => {
+      return await ctx.db.get(campaign.campaignId);
+    });
+    expect(scheduledCampaign?.status).toBe("scheduled");
+    expect(scheduledCampaign?.startedAt).toBeUndefined();
+
+    const claimedTooEarly = await t.mutation(
+      internal.campaigns.claimDueCampaignsInternal,
+      {},
+    );
+    expect(claimedTooEarly).toEqual([]);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(campaign.campaignId, {
+        scheduledAt: Date.now() - 1000,
+      });
+    });
+
+    const claimed = await t.mutation(
+      internal.campaigns.claimDueCampaignsInternal,
+      {},
+    );
+    expect(claimed).toEqual([campaign.campaignId]);
+
+    const sendingCampaign = await t.run(async (ctx) => {
+      return await ctx.db.get(campaign.campaignId);
+    });
+    expect(sendingCampaign?.status).toBe("sending");
+    expect(sendingCampaign?.startedAt).toBeTypeOf("number");
+  });
 });
