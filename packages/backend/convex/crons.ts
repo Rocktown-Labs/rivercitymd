@@ -13,6 +13,13 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "queue-maintenance-refresh-recovery",
+  { minutes: 60 },
+  internal.campaigns.enqueueMaintenanceRefreshRecovery,
+  {},
+);
+
 export const cleanupResend = internalMutation({
   args: {},
   handler: async (ctx) => {
