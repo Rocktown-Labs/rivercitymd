@@ -14,6 +14,8 @@ import { getEffectiveServicePricingForVehicle } from "./lib/pricing";
 import { normalizeUserNotificationPreferences } from "./lib/notificationSettings";
 import { getCentralHour, getNextNineAmCentral } from "./lib/scheduling";
 
+const RECOVERY_ALLOWLIST_EMAILS = new Set(["camstewart7@gmail.com"]);
+
 const campaignAudienceValidator = v.object({
   draftIds: v.optional(v.array(v.id("bookingDrafts"))),
   statuses: v.optional(
@@ -385,19 +387,74 @@ export const findMaintenanceRefreshRecoveryCandidatesInternal = internalQuery({
       return { candidates: [] };
     }
 
+    const users = await ctx.db.query("users").collect();
+    const usersByEmail = new Map<string, Doc<"users">[]>();
+    const usersByName = new Map<string, Doc<"users">[]>();
+    for (const user of users) {
+      const email = normalizeEmail(user.email);
+      if (email) {
+        const matches = usersByEmail.get(email) ?? [];
+        matches.push(user);
+        usersByEmail.set(email, matches);
+      }
+      const name = (user.name ?? "").trim().toLowerCase();
+      if (name) {
+        const matches = usersByName.get(name) ?? [];
+        matches.push(user);
+        usersByName.set(name, matches);
+      }
+    }
+
+    const appointments = await ctx.db.query("appointments").collect();
+    const invoices = await ctx.db.query("invoices").collect();
+    const subscriptions = await ctx.db.query("subscriptions").collect();
+    const existingCustomerUserIds = new Set<Id<"users">>([
+      ...appointments.map((appointment) => appointment.userId),
+      ...invoices.map((invoice) => invoice.userId),
+      ...subscriptions.map((subscription) => subscription.userId),
+    ]);
+
     const drafts = await ctx.db.query("bookingDrafts").collect();
     const candidates = drafts
-      .filter(
-        (draft) =>
-          draft.status === "expired" &&
-          !draft.abandonedEmailSentAt &&
-          !draft.abandonedEmailScheduledId &&
-          !draft.abandonedFollowUpScheduledId &&
-          Boolean(draft.customerEmail) &&
-          draft.serviceIds.some((serviceId) =>
+      .filter((draft) => {
+        if (
+          draft.status !== "expired" ||
+          draft.abandonedEmailSentAt ||
+          draft.abandonedEmailScheduledId ||
+          draft.abandonedFollowUpScheduledId ||
+          !draft.customerEmail ||
+          !draft.serviceIds.some((serviceId) =>
             maintenanceServiceIds.has(serviceId),
-          ),
-      )
+          )
+        ) {
+          return false;
+        }
+
+        const email = normalizeEmail(draft.customerEmail);
+        if (RECOVERY_ALLOWLIST_EMAILS.has(email)) {
+          return true;
+        }
+
+        const name = (draft.customerName ?? "").trim().toLowerCase();
+        const matchingUsers = [
+          ...(usersByEmail.get(email) ?? []),
+          ...(name ? (usersByName.get(name) ?? []) : []),
+        ];
+        if (
+          matchingUsers.some((user) =>
+            existingCustomerUserIds.has(user._id),
+          )
+        ) {
+          return false;
+        }
+        if (
+          draft.convertedUserId &&
+          existingCustomerUserIds.has(draft.convertedUserId)
+        ) {
+          return false;
+        }
+        return true;
+      })
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 
     const byEmail = new Map<string, Doc<"bookingDrafts">>();
@@ -430,6 +487,29 @@ export const markRecoveryBackfillScheduledInternal = internalMutation({
       abandonedEmailScheduledId: args.abandonedEmailScheduledId,
       abandonedFollowUpScheduledId: args.abandonedFollowUpScheduledId,
     });
+  },
+});
+
+export const cancelRecoveryBackfillInternal = internalMutation({
+  args: { draftIds: v.array(v.id("bookingDrafts")) },
+  handler: async (ctx, args): Promise<Id<"bookingDrafts">[]> => {
+    const canceled: Id<"bookingDrafts">[] = [];
+    for (const draftId of args.draftIds) {
+      const draft = await ctx.db.get(draftId);
+      if (!draft) continue;
+      if (draft.abandonedEmailScheduledId) {
+        await ctx.scheduler.cancel(draft.abandonedEmailScheduledId);
+      }
+      if (draft.abandonedFollowUpScheduledId) {
+        await ctx.scheduler.cancel(draft.abandonedFollowUpScheduledId);
+      }
+      await ctx.db.patch(draftId, {
+        abandonedEmailScheduledId: undefined,
+        abandonedFollowUpScheduledId: undefined,
+      });
+      canceled.push(draftId);
+    }
+    return canceled;
   },
 });
 

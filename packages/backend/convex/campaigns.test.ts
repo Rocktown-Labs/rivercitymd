@@ -319,4 +319,85 @@ describe("membership campaign audience", () => {
       result.candidates.map((candidate) => candidate.email).sort(),
     ).toEqual(["repeat@example.com", "unique@example.com"]);
   });
+
+  test("excludes existing customers but keeps the allowlisted admin", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+    const { maintenanceServiceId } = await seedServices(t);
+
+    const existingUserId = await t.run(async (ctx) => {
+      return await ctx.db.insert("users", {
+        name: "Existing Customer",
+        email: "existing-customer@example.com",
+        role: "client",
+      });
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.insert("appointments", {
+        userId: existingUserId,
+        vehicleIds: [],
+        serviceIds: [],
+        scheduledDate: "2026-08-04",
+        scheduledTime: "10:00",
+        duration: 60,
+        location: {
+          street: "100 Main St",
+          city: "Little Rock",
+          state: "AR",
+          zip: "72201",
+        },
+        status: "completed",
+        totalPrice: 100,
+        createdBy: existingUserId,
+      });
+    });
+
+    const adminId = await t.run(async (ctx) => {
+      return await ctx.db.insert("users", {
+        name: "Cameron Stewart",
+        email: "camstewart7@gmail.com",
+        role: "admin",
+      });
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.insert("appointments", {
+        userId: adminId,
+        vehicleIds: [],
+        serviceIds: [],
+        scheduledDate: "2026-08-05",
+        scheduledTime: "11:00",
+        duration: 60,
+        location: {
+          street: "100 Main St",
+          city: "Little Rock",
+          state: "AR",
+          zip: "72201",
+        },
+        status: "completed",
+        totalPrice: 100,
+        createdBy: adminId,
+      });
+    });
+
+    await createExpiredDraft(t, {
+      email: "existing-customer@example.com",
+      maintenanceServiceId,
+    });
+    await createExpiredDraft(t, {
+      email: "new-customer@example.com",
+      maintenanceServiceId,
+    });
+    await createExpiredDraft(t, {
+      email: "camstewart7@gmail.com",
+      maintenanceServiceId,
+    });
+
+    const result = await t.query(
+      internal.campaigns.findMaintenanceRefreshRecoveryCandidatesInternal,
+      {},
+    );
+    expect(
+      result.candidates.map((candidate) => candidate.email).sort(),
+    ).toEqual(["camstewart7@gmail.com", "new-customer@example.com"]);
+  });
 });
