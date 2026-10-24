@@ -9,6 +9,7 @@ const isPublicRoute = createRouteMatcher([
   "/booking(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
+  "/unsubscribe(.*)",
   "/api/r2-upload-relay",
   "/robots.txt",
   "/sitemap.xml",
