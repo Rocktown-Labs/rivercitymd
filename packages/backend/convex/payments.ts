@@ -14,12 +14,14 @@ import { stripeClient } from "./stripeClient";
 import { BOOKING_BLOCK_MINUTES } from "./lib/booking";
 import { normalizeStripeCouponCode, validateCouponInput } from "./lib/coupons";
 import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
+import { getEffectiveServicePricingForVehicle } from "./lib/pricing";
 
 const paymentsInternal: any = (internal as any).payments;
 const STRIPE_API_MAX_ATTEMPTS = 3;
 const STRIPE_API_RETRY_DELAYS_MS = [250, 750] as const;
 const BOOKING_HOLD_DURATION_MS = 15 * 60 * 1000;
-const ABANDONED_RECOVERY_DELAY_MS = 60 * 60 * 1000;
+const ABANDONED_RECOVERY_DELAY_MS = 20 * 60 * 1000;
+const ABANDONED_FOLLOW_UP_DELAY_MS = 24 * 60 * 60 * 1000;
 
 // Helper function to get Stripe secret key from environment
 function getStripeSecretKey(): string {
@@ -2985,6 +2987,15 @@ async function createCheckoutSessionForDraft(
     internal.payments.sendAbandonedBookingRecoveryEmail,
     {
       draftId: draft._id,
+      stage: "first",
+    },
+  );
+  const abandonedFollowUpScheduledId = await ctx.scheduler.runAfter(
+    ABANDONED_FOLLOW_UP_DELAY_MS,
+    internal.payments.sendAbandonedBookingRecoveryEmail,
+    {
+      draftId: draft._id,
+      stage: "follow_up",
     },
   );
 
@@ -2996,6 +3007,7 @@ async function createCheckoutSessionForDraft(
     holdExpiresAt: now + BOOKING_HOLD_DURATION_MS,
     holdExpiryScheduledId,
     abandonedEmailScheduledId,
+    abandonedFollowUpScheduledId,
   });
 
   return {
@@ -3270,9 +3282,79 @@ export const expireBookingDraftCheckout = internalAction({
   },
 });
 
+async function getMembershipOfferForDraft(
+  ctx: any,
+  draft: Doc<"bookingDrafts">,
+): Promise<{
+  planName: string;
+  includedServiceName: string;
+  oneTimePrice?: number;
+  monthlyPrice: number;
+  savingsPerVisit?: number;
+  annualSavings?: number;
+  kind: "replacement" | "after_detail";
+} | null> {
+  const services = await ctx.runQuery(api.services.list, {});
+  const activePlans = services.filter(
+    (service: any) =>
+      service.isActive &&
+      service.serviceType === "subscription" &&
+      (service.includedServiceIds?.length ?? 0) > 0,
+  );
+  if (activePlans.length === 0) return null;
+
+  const firstVehicle = draft.draftVehicles?.[0];
+  const vehicleSize = firstVehicle?.size ?? draft.vehicleSize ?? "medium";
+  const vehicleTypeId = firstVehicle?.vehicleTypeId ?? null;
+  const vehicleContext = { vehicleSize, vehicleTypeId };
+
+  const replacementPlan = activePlans.find((plan: any) =>
+    (plan.includedServiceIds ?? []).some((serviceId: Id<"services">) =>
+      draft.serviceIds.includes(serviceId),
+    ),
+  );
+  const plan = replacementPlan ?? activePlans[0];
+  const includedServiceId =
+    (plan.includedServiceIds ?? []).find((serviceId: Id<"services">) =>
+      draft.serviceIds.includes(serviceId),
+    ) ?? plan.includedServiceIds?.[0];
+  const includedService = services.find(
+    (service: any) => service._id === includedServiceId,
+  );
+  if (!includedService) return null;
+
+  const planPricing = getEffectiveServicePricingForVehicle(
+    plan,
+    vehicleContext,
+  );
+  const includedPricing = getEffectiveServicePricingForVehicle(
+    includedService,
+    vehicleContext,
+  );
+  const monthlyPrice = planPricing.price;
+  if (monthlyPrice <= 0) return null;
+
+  const isReplacement = Boolean(replacementPlan);
+  const oneTimePrice = includedPricing.price;
+  const savingsPerVisit = isReplacement
+    ? Math.max(0, oneTimePrice - monthlyPrice)
+    : undefined;
+
+  return {
+    planName: plan.name,
+    includedServiceName: includedService.name,
+    oneTimePrice: isReplacement ? oneTimePrice : undefined,
+    monthlyPrice,
+    savingsPerVisit,
+    annualSavings: savingsPerVisit ? savingsPerVisit * 12 : undefined,
+    kind: isReplacement ? "replacement" : "after_detail",
+  };
+}
+
 export const sendAbandonedBookingRecoveryEmail = internalAction({
   args: {
     draftId: v.id("bookingDrafts"),
+    stage: v.union(v.literal("first"), v.literal("follow_up")),
   },
   handler: async (ctx, args) => {
     const draft = await ctx.runQuery(internal.bookingDrafts.getByIdInternal, {
@@ -3283,14 +3365,23 @@ export const sendAbandonedBookingRecoveryEmail = internalAction({
     }
     if (
       draft.status === "converted" ||
-      draft.status === "draft" ||
-      draft.abandonedEmailSentAt
+      draft.status === "cancelled" ||
+      draft.status === "completed"
     ) {
       return false;
     }
+    if (args.stage === "first") {
+      if (draft.status === "draft" || draft.abandonedEmailSentAt) {
+        return false;
+      }
+    } else {
+      if (!draft.abandonedEmailSentAt || draft.abandonedFollowUpSentAt) {
+        return false;
+      }
+    }
 
-    const appOrigin =
-      process.env.CONVEX_SITE_URL || "https://patient-wombat-877.convex.site";
+    const membershipOffer =
+      (await getMembershipOfferForDraft(ctx, draft)) ?? undefined;
     await ctx.runAction(internal.emails.sendAbandonedCheckoutRecoveryEmail, {
       customerName: draft.customerName,
       to: draft.customerEmail,
@@ -3299,15 +3390,25 @@ export const sendAbandonedBookingRecoveryEmail = internalAction({
       serviceNames: draft.priceSnapshot.map(
         (item: { serviceName: string }) => item.serviceName,
       ),
-      resumeUrl: buildBookingRedirectUrl(
-        appOrigin,
-        "/booking/resume",
-        draft.resumeToken,
-      ),
+      resumeToken: draft.resumeToken,
+      recoveryStage: args.stage,
+      membershipOffer,
     });
-    await ctx.runMutation(internal.bookingDrafts.markAbandonedEmailSentInternal, {
-      draftId: draft._id,
-    });
+    if (args.stage === "first") {
+      await ctx.runMutation(
+        internal.bookingDrafts.markAbandonedEmailSentInternal,
+        {
+          draftId: draft._id,
+        },
+      );
+    } else {
+      await ctx.runMutation(
+        internal.bookingDrafts.markAbandonedFollowUpSentInternal,
+        {
+          draftId: draft._id,
+        },
+      );
+    }
 
     return true;
   },

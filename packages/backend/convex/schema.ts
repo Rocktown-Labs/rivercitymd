@@ -506,6 +506,11 @@ const schema = defineSchema({
     holdExpiryScheduledId: v.optional(v.id("_scheduled_functions")),
     abandonedEmailScheduledId: v.optional(v.id("_scheduled_functions")),
     abandonedEmailSentAt: v.optional(v.number()),
+    abandonedFollowUpScheduledId: v.optional(v.id("_scheduled_functions")),
+    abandonedFollowUpSentAt: v.optional(v.number()),
+    recoveryClickedAt: v.optional(v.number()),
+    recoveryClickCount: v.optional(v.number()),
+    recoverySource: v.optional(v.string()),
     cancelledAt: v.optional(v.number()),
     expiredAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
@@ -522,6 +527,97 @@ const schema = defineSchema({
     .index("by_status", ["status"])
     .index("by_checkout_session_id", ["stripeCheckoutSessionId"])
     .index("by_source_user", ["sourceUserId"]),
+
+  // Email campaigns for consent-aware abandoned-cart and membership outreach.
+  emailCampaigns: defineTable({
+    name: v.string(),
+    type: v.union(
+      v.literal("abandoned_recovery"),
+      v.literal("membership_offer"),
+      v.literal("custom"),
+    ),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("scheduled"),
+      v.literal("sending"),
+      v.literal("sent"),
+      v.literal("cancelled"),
+    ),
+    templateKey: v.string(),
+    subject: v.string(),
+    audience: v.object({
+      draftIds: v.optional(v.array(v.id("bookingDrafts"))),
+      statuses: v.optional(
+        v.array(
+          v.union(
+            v.literal("expired"),
+            v.literal("checkout_open"),
+            v.literal("cancelled"),
+          ),
+        ),
+      ),
+      serviceIds: v.optional(v.array(v.id("services"))),
+      createdAfter: v.optional(v.number()),
+      createdBefore: v.optional(v.number()),
+      onlyMembershipEligible: v.optional(v.boolean()),
+    }),
+    totalRecipients: v.number(),
+    sentCount: v.number(),
+    failedCount: v.number(),
+    skippedCount: v.number(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    scheduledAt: v.optional(v.number()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_status", ["status"])
+    .index("by_created", ["createdAt"]),
+
+  emailCampaignRecipients: defineTable({
+    campaignId: v.id("emailCampaigns"),
+    draftId: v.optional(v.id("bookingDrafts")),
+    userId: v.optional(v.id("users")),
+    email: v.string(),
+    name: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("sent"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    skipReason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    sentAt: v.optional(v.number()),
+    consent: v.boolean(),
+    unsubscribeToken: v.string(),
+    metadata: v.optional(
+      v.object({
+        planName: v.optional(v.string()),
+        includedServiceName: v.optional(v.string()),
+        vehicleLabel: v.optional(v.string()),
+        oneTimePrice: v.optional(v.number()),
+        monthlyPrice: v.optional(v.number()),
+        savingsPerVisit: v.optional(v.number()),
+        annualSavings: v.optional(v.number()),
+        resumeUrl: v.optional(v.string()),
+        membershipKind: v.optional(
+          v.union(v.literal("replacement"), v.literal("after_detail")),
+        ),
+      }),
+    ),
+  })
+    .index("by_campaign", ["campaignId"])
+    .index("by_campaign_and_status", ["campaignId", "status"])
+    .index("by_email", ["email"])
+    .index("by_unsubscribe_token", ["unsubscribeToken"]),
+
+  emailSuppressions: defineTable({
+    email: v.string(),
+    reason: v.string(),
+    source: v.string(),
+    createdAt: v.number(),
+  }).index("by_email", ["email"]),
 
   // Payment Methods
   paymentMethods: defineTable({

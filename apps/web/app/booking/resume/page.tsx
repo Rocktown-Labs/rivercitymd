@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useAction, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import { useBookingStore } from "@/hooks/use-booking-store";
@@ -42,13 +42,24 @@ export default function BookingResumePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
+  const recovery = searchParams.get("recovery");
   const resumeCheckout = useAction(api.payments.resumeBookingDraftCheckout);
+  const trackRecoveryClick = useMutation(api.bookingDrafts.trackRecoveryClick);
+  const trackedRecoveryRef = useRef(false);
   const draftContext = useQuery(api.bookingDrafts.getPublicContext, token ? { token } : "skip");
   const { hydrateFromDraft } = useBookingStore();
   const [status, setStatus] = useState<"idle" | "loading" | "requires_new_time" | "error">(
     "idle",
   );
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token || !recovery || trackedRecoveryRef.current) {
+      return;
+    }
+    trackedRecoveryRef.current = true;
+    void trackRecoveryClick({ token, source: recovery });
+  }, [recovery, token, trackRecoveryClick]);
 
   useEffect(() => {
     if (!token || status !== "idle") {
