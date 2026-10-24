@@ -12,6 +12,8 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Membership Checkout Label**: Show the membership plan name and first-month/recurring details on the Stripe Checkout line item instead of the generic "Full Service Payment" label.
+- **Booking Vehicle Reset**: Allow removing every vehicle entry, including the first, and add a Reset action that clears all entries and saved-vehicle selections; onboarding also allows clearing the first vehicle.
 - **Semi Pricing Exclusivity**: Require an exact Semi price row for typed vehicles so Semi no longer inherits every Truck-priced service; legacy-size fallback remains only for vehicles without a vehicle type.
 - **Subscription Email Branding**: Use the public web origin for the River City MD logo so subscription emails render the brand image reliably.
 - **Vercel Monorepo Build**: Resolve the backend path from either the repository root or the web project root so both Vercel projects can run the Convex deployment build.
