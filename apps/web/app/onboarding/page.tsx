@@ -133,7 +133,9 @@ function OnboardingWithClerk() {
   const removeVehicle = (index: number) => {
     if (vehicles.length > 1) {
       setVehicles(vehicles.filter((_, i) => i !== index));
+      return;
     }
+    setVehicles([{ year: "", make: "", model: "" }]);
   };
 
   const updateVehicle = (index: number, nextVehicle: VehicleLookupValue) => {
@@ -416,7 +418,7 @@ function OnboardingWithClerk() {
                       value={vehicle}
                       onChange={(nextVehicle) => updateVehicle(index, nextVehicle)}
                       showColor={false}
-                      onRemove={vehicles.length > 1 ? () => removeVehicle(index) : undefined}
+                      onRemove={() => removeVehicle(index)}
                     />
                   ))}
                   <Button

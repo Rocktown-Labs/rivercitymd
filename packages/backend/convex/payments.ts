@@ -2842,10 +2842,31 @@ async function createCheckoutSessionForDraft(
       "line_items[0][price_data][unit_amount]",
       totalAmountInCents.toString(),
     );
+    const membershipIntent = draft.subscriptionIntent;
     sessionData.append(
       "line_items[0][price_data][product_data][name]",
-      `Full Service Payment (${vehicleCount} vehicle${vehicleCount > 1 ? "s" : ""})`,
+      membershipIntent
+        ? `${membershipIntent.planName} — First Month`
+        : `Full Service Payment (${vehicleCount} vehicle${vehicleCount > 1 ? "s" : ""})`,
     );
+    if (membershipIntent) {
+      const recurringLabel =
+        membershipIntent.frequency === "monthly" ? "month" : "2 weeks";
+      const oneTimeExtras = Math.max(
+        0,
+        draft.totalPrice - membershipIntent.firstMonthTotal,
+      );
+      const descriptionParts = [
+        oneTimeExtras > 0
+          ? `First month + $${oneTimeExtras.toFixed(2)} one-time add-ons`
+          : "First month paid today",
+        `then $${membershipIntent.totalPerCycle.toFixed(2)} / ${recurringLabel}`,
+      ];
+      sessionData.append(
+        "line_items[0][price_data][product_data][description]",
+        descriptionParts.join(" · "),
+      );
+    }
     sessionData.append("line_items[0][quantity]", "1");
     if (resolvedCoupon) {
       sessionData.append("discounts[0][coupon]", resolvedCoupon.couponId);

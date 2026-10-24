@@ -1198,6 +1198,18 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     [step1Form],
   );
 
+  const createEmptyVehicle = () => ({
+    year: "",
+    make: "",
+    model: "",
+    color: "",
+    licensePlate: "",
+    size: "small" as "small" | "medium" | "large" | undefined,
+    hasPet: false,
+    hasHeavySoil: false,
+    beforePhotos: [],
+  });
+
   const addVehicle = async () => {
     const isValid = await step3Form.trigger();
     if (!isValid) return;
@@ -1205,17 +1217,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     const currentVehicles = step3Form.getValues("vehicles") || [];
     const nextVehicles = [
       ...currentVehicles,
-      {
-        year: "",
-        make: "",
-        model: "",
-        color: "",
-        licensePlate: "",
-        size: "small" as "small" | "medium" | "large" | undefined,
-        hasPet: false,
-        hasHeavySoil: false,
-        beforePhotos: [],
-      },
+      createEmptyVehicle(),
     ];
     step3Form.setValue("vehicles", nextVehicles);
     setExpandedVehicleIndex(nextVehicles.length - 1);
@@ -1248,12 +1250,27 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         }
         return prev;
       });
+      return;
     }
+    step3Form.setValue("vehicles", [createEmptyVehicle()], {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setExpandedVehicleIndex(0);
   };
 
   const [usedSavedVehicleIds, setUsedSavedVehicleIds] = useState<
     Id<"vehicles">[]
   >([]);
+
+  const resetVehicles = () => {
+    step3Form.setValue("vehicles", [createEmptyVehicle()], {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setUsedSavedVehicleIds([]);
+    setExpandedVehicleIndex(0);
+  };
 
   const buildSavedVehicleEntry = (
     vehicle: SavedVehicleOption,
@@ -2290,17 +2307,28 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
               )}
 
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-muted-foreground">Vehicle Details</h3>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={addVehicle}
-                    disabled={!step3Form.formState.isValid && (step3Form.getValues("vehicles")?.length || 0) > 0}
-                  >
-                    Add Another Vehicle
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={resetVehicles}
+                      disabled={isLoading}
+                    >
+                      Reset
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addVehicle}
+                      disabled={!step3Form.formState.isValid && (step3Form.getValues("vehicles")?.length || 0) > 0}
+                    >
+                      Add Another Vehicle
+                    </Button>
+                  </div>
                 </div>
 
                 {step3Form.watch("vehicles")?.map((vehicle, index) => (
@@ -2312,7 +2340,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     showLicensePlate
                     showPetToggle
                     showBeforePhotos
-                    onRemove={index > 0 ? () => handleRemoveVehicle(index) : undefined}
+                    onRemove={() => handleRemoveVehicle(index)}
                     isExpanded={expandedVehicleIndex === index}
                     onToggleExpanded={() => setExpandedVehicleIndex(index)}
                   />
