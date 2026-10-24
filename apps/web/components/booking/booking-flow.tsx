@@ -243,6 +243,7 @@ const step2Schema = z.object({
     ),
   email: z.string().trim().email("Please enter a valid email"),
   smsOptIn: z.boolean(),
+  marketingEmails: z.boolean(),
 });
 
 const step3Schema = z.object({
@@ -937,6 +938,10 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         step2Data?.smsOptIn ??
         currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn ??
         false,
+      marketingEmails:
+        step2Data?.marketingEmails ??
+        currentUser?.notificationPreferences?.marketingEmails ??
+        false,
     },
   });
 
@@ -1067,6 +1072,10 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
             currentUser?.notificationPreferences?.operationalSmsConsent
               ?.optedIn ??
             false,
+          marketingEmails:
+            step2Data?.marketingEmails ??
+            currentUser?.notificationPreferences?.marketingEmails ??
+            false,
         });
       }
 
@@ -1078,6 +1087,10 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           email: currentValues.email ?? "",
           phone,
           smsOptIn: currentValues.smsOptIn ?? false,
+          marketingEmails:
+            currentValues.marketingEmails ??
+            currentUser?.notificationPreferences?.marketingEmails ??
+            false,
         });
       }
     }
@@ -1113,6 +1126,17 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         false,
     );
   }, [currentUser, step2Data?.smsOptIn, step2Form]);
+
+  useEffect(() => {
+    if (!currentUser || step2Data?.marketingEmails !== undefined) {
+      return;
+    }
+
+    step2Form.setValue(
+      "marketingEmails",
+      currentUser.notificationPreferences?.marketingEmails ?? false,
+    );
+  }, [currentUser, step2Data?.marketingEmails, step2Form]);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !user) return;
@@ -1558,7 +1582,12 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
       return;
     }
 
-    if (!step2Schema.safeParse(step2Data).success) {
+    if (
+      !step2Schema.safeParse({
+        ...step2Data,
+        marketingEmails: step2Data.marketingEmails ?? false,
+      }).success
+    ) {
       toast.error("Please go back and enter a valid email address and phone number.");
       return;
     }
@@ -1626,6 +1655,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         scheduledDate: new Date(step1Data.scheduledDate).toISOString().split("T")[0],
         scheduledTime: step1Data.scheduledTime,
         smsOptIn: step2Data.smsOptIn,
+        marketingEmails: step2Data.marketingEmails,
         paymentOption: maintenanceSelected ? "full" : paymentOption,
         subscriptionIntent:
           maintenanceSelected && maintenancePlan
@@ -2232,6 +2262,32 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                         <p className="text-xs text-muted-foreground leading-normal">
                           Get SMS alerts for confirmations, reminders,
                           cancellations, reschedules, and when we start service.
+                        </p>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </div>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={step2Form.control}
+                name="marketingEmails"
+                render={({ field }) => (
+                  <FormItem className="rounded-xl border border-border/60 bg-muted/10 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <FormLabel className="mb-0 text-sm font-semibold text-foreground">
+                          Email me occasional offers
+                        </FormLabel>
+                        <p className="text-xs text-muted-foreground leading-normal">
+                          Maintenance tips, member offers, and seasonal
+                          promotions. You can unsubscribe anytime.
                         </p>
                       </div>
                       <FormControl>

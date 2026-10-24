@@ -92,6 +92,7 @@ function applyNotificationPreferenceUpdate(
 function buildDefaultNotificationPreferences(
   source: string,
   smsOptIn = false,
+  marketingEmails = false,
 ) {
   return applyNotificationPreferenceUpdate(
     undefined,
@@ -100,6 +101,7 @@ function buildDefaultNotificationPreferences(
         DEFAULT_USER_NOTIFICATION_PREFERENCES,
       ),
       smsNotifications: smsOptIn,
+      marketingEmails,
     },
     source,
   );
@@ -548,6 +550,7 @@ export const createUserProfile = mutation({
   args: {
     name: v.string(),
     phone: v.string(),
+    marketingEmails: v.optional(v.boolean()),
     address: v.object({
       street: v.string(),
       city: v.string(),
@@ -631,6 +634,8 @@ export const createUserProfile = mutation({
           status: "active",
           notificationPreferences: buildDefaultNotificationPreferences(
             "onboarding",
+            false,
+            args.marketingEmails ?? false,
           ),
           // stripeCustomerId will be set by onboarding/payment Stripe sync flows
         };
@@ -665,6 +670,17 @@ export const createUserProfile = mutation({
             buildDefaultNotificationPreferences("onboarding"),
         });
       }
+      if (args.marketingEmails !== undefined) {
+        const preferences = normalizeUserNotificationPreferences(
+          existingUser.notificationPreferences,
+        );
+        await ctx.db.patch(userId, {
+          notificationPreferences: {
+            ...preferences,
+            marketingEmails: args.marketingEmails,
+          },
+        });
+      }
       if (!existingUser.stripeCustomerId) {
         await ctx.scheduler.runAfter(
           0,
@@ -692,6 +708,14 @@ export const createUserProfile = mutation({
       identityEmail: identity.email,
     });
 
+    const nextNotificationPreferences = normalizeUserNotificationPreferences(
+      existingUser?.notificationPreferences ??
+        buildDefaultNotificationPreferences("onboarding"),
+    );
+    if (args.marketingEmails !== undefined) {
+      nextNotificationPreferences.marketingEmails = args.marketingEmails;
+    }
+
     await ctx.db.patch(userId, {
       name: resolvedName,
       phone: args.phone,
@@ -701,9 +725,7 @@ export const createUserProfile = mutation({
       timesServiced: 0,
       totalSpent: 0,
       status: "active",
-      notificationPreferences:
-        existingUser?.notificationPreferences ||
-        buildDefaultNotificationPreferences("onboarding"),
+      notificationPreferences: nextNotificationPreferences,
     });
 
     // Only create vehicles if they don't already exist (idempotent)

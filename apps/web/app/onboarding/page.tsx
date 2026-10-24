@@ -9,6 +9,7 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -78,6 +79,9 @@ function OnboardingWithClerk() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [marketingEmails, setMarketingEmails] = useState<boolean | undefined>(
+    undefined,
+  );
   const [hasEditedName, setHasEditedName] = useState(false);
 
   // Auto-populate email from auth system
@@ -239,6 +243,7 @@ function OnboardingWithClerk() {
       await createUserProfile({
         name,
         phone,
+        marketingEmails,
         address: {
           street,
           city,
@@ -396,6 +401,26 @@ function OnboardingWithClerk() {
                         required
                       />
                     </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-muted/10 p-4">
+                    <div className="space-y-1">
+                      <Label
+                        htmlFor="marketing-emails"
+                        className="text-sm font-semibold"
+                      >
+                        Email me occasional offers
+                      </Label>
+                      <p className="text-xs leading-normal text-muted-foreground">
+                        Maintenance tips, member offers, and seasonal
+                        promotions. You can unsubscribe anytime.
+                      </p>
+                    </div>
+                    <Switch
+                      id="marketing-emails"
+                      checked={marketingEmails ?? false}
+                      onCheckedChange={setMarketingEmails}
+                    />
                   </div>
 
                   <div className="border-t pt-4">

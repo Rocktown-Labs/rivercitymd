@@ -377,6 +377,7 @@ const schema = defineSchema({
     customerEmail: v.string(),
     customerPhone: v.string(),
     smsOptIn: v.optional(v.boolean()),
+    marketingEmails: v.optional(v.boolean()),
     address: v.object({
       street: v.string(),
       city: v.string(),

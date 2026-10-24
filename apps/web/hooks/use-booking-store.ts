@@ -46,6 +46,7 @@ interface Step2Data {
   phone: string
   email: string
   smsOptIn: boolean
+  marketingEmails?: boolean
 }
 
 interface Step3Data {

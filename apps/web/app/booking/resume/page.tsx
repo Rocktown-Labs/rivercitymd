@@ -134,6 +134,7 @@ export default function BookingResumePage() {
         phone: draftContext.phone,
         email: draftContext.email,
         smsOptIn: draftContext.smsOptIn,
+        marketingEmails: draftContext.marketingEmails,
       },
       step3Data: {
         vehicles: draftContext.vehicles.map((vehicle: DraftVehicle) => ({
