@@ -4,6 +4,8 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Email Marketing Consent**: Added an optional email marketing opt-in to the booking flow and onboarding, stored with the booking draft and carried to the customer profile on conversion.
+- **Win-Back Email Preview**: Added a Club-first win-back email template and an admin audience preview for lapsed customers and older abandoned carts, with consent, suppression, active-membership, and upcoming-appointment exclusions.
 - **Abandoned Booking Recovery Campaigns**: Added a consent-aware membership campaign system with audience preview, test sends, batched delivery, per-recipient tracking, campaign history, and a public unsubscribe flow. The admin abandoned-checkout table now supports selection, service filtering, CSV export, per-row recovery sends, and bulk Maintenance Club offers.
 - **Campaign Scheduling**: Membership campaigns can be scheduled for the next 9:00 AM or a custom local time instead of sending immediately. A Convex cron checks every 5 minutes for due campaigns, and scheduled campaigns can be sent now or cancelled from the admin campaign history.
 - **Automatic Maintenance Refresh Recovery**: A daily sweep finds expired Maintenance Refresh drafts that never received a recovery email, deduplicates by customer email, and queues the recovery email for the next 9:00 AM Central with a 24-hour follow-up.

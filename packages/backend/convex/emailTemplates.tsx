@@ -839,6 +839,127 @@ export function MaintenanceClubCampaignEmail(
   );
 }
 
+// Win-back marketing email for older abandoned carts and lapsed customers
+export interface WinBackEmailProps {
+  customerName: string;
+  businessName: string;
+  planName: string;
+  includedServiceName: string;
+  monthlyPrice: number;
+  vehicleLabel?: string;
+  lastServiceName?: string;
+  bookingUrl: string;
+  unsubscribeUrl: string;
+  logoUrl?: string;
+}
+
+export function WinBackEmail(props: WinBackEmailProps) {
+  const {
+    customerName,
+    businessName,
+    planName,
+    includedServiceName,
+    monthlyPrice,
+    vehicleLabel,
+    lastServiceName,
+    bookingUrl,
+    unsubscribeUrl,
+    logoUrl,
+  } = props;
+
+  return (
+    <EmailLayout
+      preview={`It's been a while — your car deserves a reset.`}
+      logoUrl={logoUrl}
+      businessName={businessName}
+      footerNote={
+        <>
+          You&apos;re receiving this because you opted in to marketing emails.{" "}
+          <Link href={unsubscribeUrl} style={{ color: brand.textMuted }}>
+            Unsubscribe
+          </Link>
+          .
+        </>
+      }
+    >
+      <Heading style={emailStyles.heading}>It&apos;s been a while.</Heading>
+      <Text style={emailStyles.text}>
+        Hi {customerName}, it&apos;s been a few months since{" "}
+        {lastServiceName
+          ? `your ${lastServiceName}`
+          : "your last visit"}
+        {vehicleLabel ? ` on your ${vehicleLabel}` : ""}. If your car is due
+        for a reset, we&apos;d love to get you back on the schedule.
+      </Text>
+
+      <Section
+        style={{
+          backgroundColor: "#f0f8fa",
+          border: "1px solid #cfe8ee",
+          borderRadius: "12px",
+          padding: "24px",
+          margin: "24px 0",
+          textAlign: "center",
+        }}
+      >
+        <Text
+          style={{
+            ...emailStyles.text,
+            margin: "0 0 4px",
+            fontSize: "12px",
+            letterSpacing: "1.5px",
+            textTransform: "uppercase",
+            color: brand.tealDark,
+            fontWeight: "600",
+          }}
+        >
+          {planName}
+        </Text>
+        <Text
+          style={{
+            ...emailStyles.heading,
+            fontSize: "38px",
+            margin: "0",
+            lineHeight: "1.1",
+          }}
+        >
+          ${monthlyPrice.toFixed(0)}
+          <span style={{ fontSize: "16px", color: brand.textMuted }}>
+            {" "}
+            / month
+          </span>
+        </Text>
+        <Text style={{ ...emailStyles.textBody, margin: "8px 0 0" }}>
+          Includes one {includedServiceName} each month.
+        </Text>
+      </Section>
+
+      <Text style={emailStyles.textBody}>
+        Member pricing, a recurring schedule you don&apos;t have to remember,
+        and the same detail you already know. Cancel anytime.
+      </Text>
+
+      <Section style={{ textAlign: "center", marginBottom: "8px" }}>
+        <Button href={bookingUrl} style={emailStyles.primaryButton}>
+          See Available Times
+        </Button>
+      </Section>
+
+      <Text
+        style={{
+          ...emailStyles.text,
+          textAlign: "center",
+          fontSize: "12px",
+          color: brand.textMuted,
+        }}
+      >
+        Prefer a one-time detail? You can book any service at the regular
+        price.
+      </Text>
+    </EmailLayout>
+  );
+}
+
 // Admin New Customer Notification Email
 export interface AdminNewCustomerNotificationEmailProps {
   userName: string;

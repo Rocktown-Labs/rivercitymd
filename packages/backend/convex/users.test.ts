@@ -64,6 +64,7 @@ describe("users", () => {
     await asUser.mutation(api.users.createUserProfile, {
       name: "Subject Only User",
       phone: "555-0100",
+      marketingEmails: true,
       address: {
         street: "100 Subject St",
         city: "Little Rock",
@@ -89,6 +90,9 @@ describe("users", () => {
       clerkUserId,
       role: "client",
     });
+    expect(
+      updatedUser?.notificationPreferences?.marketingEmails,
+    ).toBe(true);
     expect(updatedUser?.address).toMatchObject({
       street: "100 Subject St",
       city: "Little Rock",

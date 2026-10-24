@@ -302,10 +302,15 @@ function assertBookableServices(
   }
 }
 
-function buildBookingNotificationPreferences(smsOptIn: boolean, now: number) {
+function buildBookingNotificationPreferences(
+  smsOptIn: boolean,
+  marketingEmails: boolean,
+  now: number,
+) {
   return normalizeUserNotificationPreferences({
     ...DEFAULT_USER_NOTIFICATION_PREFERENCES,
     smsNotifications: smsOptIn,
+    marketingEmails,
     operationalSmsConsent: {
       optedIn: smsOptIn,
       optedInAt: smsOptIn ? now : undefined,
@@ -318,12 +323,14 @@ function buildBookingNotificationPreferences(smsOptIn: boolean, now: number) {
 function buildUpdatedNotificationPreferences(
   currentPreferences: Doc<"users">["notificationPreferences"],
   smsOptIn: boolean,
+  marketingEmails: boolean | undefined,
   now: number,
 ) {
   const current = normalizeUserNotificationPreferences(currentPreferences);
   return normalizeUserNotificationPreferences({
     ...current,
     smsNotifications: smsOptIn,
+    marketingEmails: marketingEmails ?? current.marketingEmails,
     operationalSmsConsent: {
       ...current.operationalSmsConsent,
       optedIn: smsOptIn,
@@ -817,6 +824,7 @@ export const createOrUpdateInternal = internalMutation({
     email: v.string(),
     phone: v.string(),
     smsOptIn: v.optional(v.boolean()),
+    marketingEmails: v.optional(v.boolean()),
     address: addressValidator,
     existingVehicleIds: v.optional(v.array(v.id("vehicles"))),
     existingVehicleServices: v.optional(
@@ -948,6 +956,7 @@ export const createOrUpdateInternal = internalMutation({
         customerEmail: normalizeEmail(args.email),
         customerPhone: args.phone,
         smsOptIn: args.smsOptIn ?? false,
+        marketingEmails: args.marketingEmails ?? false,
         address: args.address,
         existingVehicleIds,
         existingVehicleServices: args.existingVehicleServices,
@@ -1001,6 +1010,7 @@ export const createOrUpdateInternal = internalMutation({
       customerEmail: normalizeEmail(args.email),
       customerPhone: args.phone,
       smsOptIn: args.smsOptIn ?? false,
+      marketingEmails: args.marketingEmails ?? false,
       address: args.address,
       existingVehicleIds,
       existingVehicleServices: args.existingVehicleServices,
@@ -1038,6 +1048,7 @@ export const createOrUpdate = action({
     email: v.string(),
     phone: v.string(),
     smsOptIn: v.optional(v.boolean()),
+    marketingEmails: v.optional(v.boolean()),
     address: addressValidator,
     existingVehicleIds: v.optional(v.array(v.id("vehicles"))),
     existingVehicleServices: v.optional(
@@ -1492,6 +1503,7 @@ export const convertSuccessfulCheckout = internalMutation({
       updates.notificationPreferences = buildUpdatedNotificationPreferences(
         user.notificationPreferences,
         draft.smsOptIn ?? false,
+        draft.marketingEmails,
         now,
       );
       if (Object.keys(updates).length > 0) {
@@ -1520,6 +1532,7 @@ export const convertSuccessfulCheckout = internalMutation({
         stripeCustomerId: args.stripeCustomerId,
         notificationPreferences: buildBookingNotificationPreferences(
           draft.smsOptIn ?? false,
+          draft.marketingEmails ?? false,
           now,
         ),
       });
@@ -1795,6 +1808,7 @@ export const getPublicContext = query({
       name: draft.customerName,
       phone: draft.customerPhone,
       smsOptIn: draft.smsOptIn ?? false,
+      marketingEmails: draft.marketingEmails ?? false,
       scheduledDate: draft.scheduledDate,
       scheduledTime: draft.scheduledTime,
       serviceIds: draft.serviceIds,

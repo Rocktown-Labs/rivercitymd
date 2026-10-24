@@ -363,6 +363,168 @@ export const previewAudience = query({
   },
 });
 
+export const previewWinBackAudience = query({
+  args: { minDays: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const minDays = args.minDays ?? 90;
+    const now = Date.now();
+    const cutoff = now - minDays * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(cutoff).toISOString().slice(0, 10);
+    const today = new Date(now).toISOString().slice(0, 10);
+
+    const [users, appointments, subscriptions, drafts, services, suppressions] =
+      await Promise.all([
+        ctx.db.query("users").collect(),
+        ctx.db.query("appointments").collect(),
+        ctx.db.query("subscriptions").collect(),
+        ctx.db.query("bookingDrafts").collect(),
+        ctx.db.query("services").collect(),
+        ctx.db.query("emailSuppressions").collect(),
+      ]);
+
+    const serviceNameById = new Map(
+      services.map((service) => [service._id, service.name]),
+    );
+    const suppressedEmails = new Set(
+      suppressions.map((suppression) => normalizeEmail(suppression.email)),
+    );
+    const activeClubUserIds = new Set(
+      subscriptions
+        .filter((subscription) => subscription.status === "active")
+        .map((subscription) => subscription.userId),
+    );
+    const upcomingUserIds = new Set(
+      appointments
+        .filter(
+          (appointment) =>
+            appointment.scheduledDate >= today &&
+            (appointment.status === "pending" ||
+              appointment.status === "confirmed" ||
+              appointment.status === "in_progress"),
+        )
+        .map((appointment) => appointment.userId),
+    );
+
+    const lastCompletedByUser = new Map<
+      Id<"users">,
+      Doc<"appointments">
+    >();
+    for (const appointment of appointments) {
+      if (appointment.status !== "completed") continue;
+      const existing = lastCompletedByUser.get(appointment.userId);
+      if (
+        !existing ||
+        appointment.scheduledDate > existing.scheduledDate
+      ) {
+        lastCompletedByUser.set(appointment.userId, appointment);
+      }
+    }
+
+    const draftsByEmail = new Map<string, Doc<"bookingDrafts">>();
+    for (const draft of drafts) {
+      if (draft.status !== "expired" || draft.lastActivityAt >= cutoff) {
+        continue;
+      }
+      const email = normalizeEmail(draft.customerEmail);
+      if (!email) continue;
+      const existing = draftsByEmail.get(email);
+      if (!existing || draft.lastActivityAt > existing.lastActivityAt) {
+        draftsByEmail.set(email, draft);
+      }
+    }
+
+    const lapsed: Array<{
+      name: string;
+      email: string;
+      lastService: string[];
+      lastAppointmentDate: string;
+      totalSpent: number;
+    }> = [];
+    const olderAbandoners: Array<{
+      name: string;
+      email: string;
+      abandonedService: string[];
+      abandonedAt: string;
+      totalPrice: number;
+    }> = [];
+    const excluded = {
+      activeClub: 0,
+      upcoming: 0,
+      suppressed: 0,
+      noConsent: 0,
+    };
+    const seen = new Set<string>();
+
+    for (const user of users) {
+      if (user.role === "admin") continue;
+      const email = normalizeEmail(user.email);
+      if (!email) continue;
+
+      const lastCompleted = lastCompletedByUser.get(user._id);
+      const oldDraft = draftsByEmail.get(email);
+      const isLapsed = Boolean(
+        lastCompleted && lastCompleted.scheduledDate < cutoffDate,
+      );
+      const isOlderAbandoner = Boolean(!lastCompleted && oldDraft);
+      if (!isLapsed && !isOlderAbandoner) continue;
+
+      if (user.notificationPreferences?.marketingEmails !== true) {
+        excluded.noConsent += 1;
+        continue;
+      }
+      if (suppressedEmails.has(email)) {
+        excluded.suppressed += 1;
+        continue;
+      }
+      if (activeClubUserIds.has(user._id)) {
+        excluded.activeClub += 1;
+        continue;
+      }
+      if (upcomingUserIds.has(user._id)) {
+        excluded.upcoming += 1;
+        continue;
+      }
+      if (seen.has(email)) continue;
+      seen.add(email);
+
+      if (isLapsed && lastCompleted) {
+        lapsed.push({
+          name: user.name ?? "there",
+          email: user.email ?? "",
+          lastService: lastCompleted.serviceIds.map(
+            (serviceId) => serviceNameById.get(serviceId) ?? serviceId,
+          ),
+          lastAppointmentDate: lastCompleted.scheduledDate,
+          totalSpent: user.totalSpent ?? 0,
+        });
+      } else if (isOlderAbandoner && oldDraft) {
+        olderAbandoners.push({
+          name: user.name ?? "there",
+          email: user.email ?? "",
+          abandonedService: oldDraft.serviceIds.map(
+            (serviceId) => serviceNameById.get(serviceId) ?? serviceId,
+          ),
+          abandonedAt: new Date(oldDraft.lastActivityAt).toISOString(),
+          totalPrice: oldDraft.totalPrice,
+        });
+      }
+    }
+
+    return {
+      minDays,
+      totals: {
+        lapsed: lapsed.length,
+        olderAbandoners: olderAbandoners.length,
+        eligible: lapsed.length + olderAbandoners.length,
+      },
+      lapsed: lapsed.slice(0, 25),
+      olderAbandoners: olderAbandoners.slice(0, 25),
+      excluded,
+    };
+  },
+});
+
 export const findMaintenanceRefreshRecoveryCandidatesInternal = internalQuery({
   args: {},
   handler: async (ctx): Promise<{

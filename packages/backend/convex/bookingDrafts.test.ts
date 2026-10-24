@@ -213,6 +213,64 @@ describe("bookingDrafts pricing validation", () => {
     expect(schedulingDuration).toBe(120);
   });
 
+  test("carries booking email marketing consent to the converted user", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, {
+      includeBookableService: false,
+      includeDepositSettings: true,
+    });
+
+    const serviceId = await t.run(async (ctx) => {
+      return await ctx.db.insert("services", {
+        name: "Marketing Consent Detail",
+        description: "Test detail",
+        basePrice: 100,
+        basePriceMedium: 100,
+        duration: 60,
+        serviceType: "standard",
+        isActive: true,
+      });
+    });
+
+    const booking = await t.action(api.bookingDrafts.createOrUpdate, {
+      name: "Marketing Consent",
+      email: "marketing-consent@example.com",
+      phone: "555-0100",
+      marketingEmails: true,
+      address: {
+        street: "100 Main St",
+        city: "Little Rock",
+        state: "AR",
+        zip: "72201",
+      },
+      vehicles: [
+        {
+          year: 2022,
+          make: "Toyota",
+          model: "Camry",
+          size: "medium",
+        },
+      ],
+      serviceIds: [serviceId],
+      scheduledDate: "2026-08-03",
+      scheduledTime: "10:00",
+    });
+
+    await t.mutation(internal.bookingDrafts.convertSuccessfulCheckout, {
+      draftId: booking.draftId,
+      stripeCustomerId: "cus_marketing_consent",
+      paymentIntentId: "pi_marketing_consent",
+    });
+
+    const user = await t.run(async (ctx) => {
+      const draft = await ctx.db.get(booking.draftId);
+      return draft?.convertedUserId
+        ? await ctx.db.get(draft.convertedUserId)
+        : null;
+    });
+    expect(user?.notificationPreferences?.marketingEmails).toBe(true);
+  });
+
   test("replaces the included service with the membership first month and includes recurring fees", async () => {
     const t = convexTest(schema, modules);
     await seedBookingSetup(t, { includeBookableService: false });
