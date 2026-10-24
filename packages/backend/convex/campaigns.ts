@@ -440,6 +440,9 @@ export const findMaintenanceRefreshRecoveryCandidatesInternal = internalQuery({
           ...(usersByEmail.get(email) ?? []),
           ...(name ? (usersByName.get(name) ?? []) : []),
         ];
+        if (matchingUsers.some((user) => user.role === "admin")) {
+          return false;
+        }
         if (
           matchingUsers.some((user) =>
             existingCustomerUserIds.has(user._id),

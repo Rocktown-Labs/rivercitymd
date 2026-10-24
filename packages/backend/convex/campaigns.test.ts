@@ -423,4 +423,27 @@ describe("membership campaign audience", () => {
     expect(draft?.abandonedEmailScheduledId).toBeTypeOf("string");
     expect(draft?.abandonedFollowUpScheduledId).toBeTypeOf("string");
   });
+
+  test("excludes admin accounts from recovery candidates", async () => {
+    const t = convexTest(schema, modules);
+    await seedBookingSetup(t, { includeBookableService: false });
+    const { maintenanceServiceId } = await seedServices(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("users", {
+        name: "Admin User",
+        email: "admin-user@example.com",
+        role: "admin",
+      });
+    });
+    await createExpiredDraft(t, {
+      email: "admin-user@example.com",
+      maintenanceServiceId,
+    });
+
+    const result = await t.query(
+      internal.campaigns.findMaintenanceRefreshRecoveryCandidatesInternal,
+      {},
+    );
+    expect(result.candidates).toHaveLength(0);
+  });
 });
