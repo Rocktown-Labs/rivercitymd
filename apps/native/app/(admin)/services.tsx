@@ -1,17 +1,19 @@
 import * as React from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
+import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useMutation, useQuery } from "convex/react";
-import { api } from "@rivercitymd/backend/convex/_generated/api";
-import type { Doc, Id } from "@rivercitymd/backend/convex/_generated/dataModel";
-import { CarFront, Check, Clock, DollarSign, Plus, Sparkles, Tag } from "lucide-react-native";
+import * as Haptics from "expo-haptics";
+import { Clock, Search } from "lucide-react-native";
 
+import { api } from "@rivercitymd/backend/convex/_generated/api";
+import type { Doc } from "@rivercitymd/backend/convex/_generated/dataModel";
 import { EmptyState } from "@/components/empty-state";
 import { Screen, ScreenHeader } from "@/components/screen";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { Switch } from "@/components/ui/switch";
 import { Text } from "@/components/ui/text";
 import { THEME } from "@/lib/theme";
 
@@ -22,37 +24,77 @@ const CATEGORY_TABS = [
   { label: "Subscriptions", value: "subscription" },
 ] as const;
 
+function toNumber(value: string, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export default function AdminServicesScreen() {
   const services = useQuery(api.services.list, {});
   const updateServiceMutation = useMutation(api.services.update);
 
   const [activeCategory, setActiveCategory] = React.useState<string>("all");
-  const [selectedService, setSelectedService] = React.useState<Doc<"services"> | null>(null);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [selectedService, setSelectedService] =
+    React.useState<Doc<"services"> | null>(null);
   const [isUpdating, setIsUpdating] = React.useState(false);
 
-  const filteredServices = (services || []).filter((s) => {
-    if (activeCategory === "all") return true;
-    return (s.serviceType || "standard") === activeCategory;
+  const [name, setName] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [smallPrice, setSmallPrice] = React.useState("");
+  const [mediumPrice, setMediumPrice] = React.useState("");
+  const [largePrice, setLargePrice] = React.useState("");
+  const [duration, setDuration] = React.useState("");
+  const [isActive, setIsActive] = React.useState(true);
+
+  React.useEffect(() => {
+    if (!selectedService) return;
+    setName(selectedService.name);
+    setDescription(selectedService.description);
+    setSmallPrice(String(selectedService.basePriceSmall ?? ""));
+    setMediumPrice(String(selectedService.basePriceMedium ?? ""));
+    setLargePrice(String(selectedService.basePriceLarge ?? ""));
+    setDuration(String(selectedService.duration ?? ""));
+    setIsActive(selectedService.isActive);
+  }, [selectedService]);
+
+  const filteredServices = (services || []).filter((service) => {
+    const matchesCategory =
+      activeCategory === "all" ||
+      (service.serviceType || "standard") === activeCategory;
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch =
+      !q ||
+      service.name.toLowerCase().includes(q) ||
+      service.description.toLowerCase().includes(q);
+    return matchesCategory && matchesSearch;
   });
 
-  const handleToggleActive = async (service: Doc<"services">, nextActive: boolean) => {
+  const handleSaveService = async () => {
+    if (!selectedService) return;
     setIsUpdating(true);
     try {
       await updateServiceMutation({
-        serviceId: service._id,
-        name: service.name,
-        description: service.description,
-        basePriceSmall: service.basePriceSmall,
-        basePriceMedium: service.basePriceMedium,
-        basePriceLarge: service.basePriceLarge,
-        duration: service.duration,
-        serviceType: service.serviceType,
-        isActive: nextActive,
+        serviceId: selectedService._id,
+        name: name.trim(),
+        description: description.trim(),
+        basePriceSmall: toNumber(smallPrice, 0),
+        basePriceMedium: toNumber(mediumPrice, 0),
+        basePriceLarge: toNumber(largePrice, 0),
+        duration: toNumber(duration, selectedService.duration),
+        serviceType: selectedService.serviceType,
+        isActive,
       });
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success,
+      );
       setSelectedService(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to toggle service status";
-      Alert.alert("Error", msg);
+      Alert.alert("Service updated", "The service and pricing are saved.");
+    } catch (error) {
+      Alert.alert(
+        "Could not update service",
+        error instanceof Error ? error.message : "Please try again.",
+      );
     } finally {
       setIsUpdating(false);
     }
@@ -66,7 +108,13 @@ export default function AdminServicesScreen() {
         description="Manage detailing packages, add-ons, durations, and vehicle size pricing."
       />
 
-      {/* Category Tabs */}
+      <Input
+        placeholder="Search services"
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+        leftIcon={<Search size={18} color={THEME.light.mutedForeground} />}
+      />
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -98,7 +146,6 @@ export default function AdminServicesScreen() {
         })}
       </ScrollView>
 
-      {/* Services List */}
       {filteredServices.length ? (
         <View className="gap-3">
           {filteredServices.map((service) => (
@@ -118,31 +165,50 @@ export default function AdminServicesScreen() {
                         label={service.isActive ? "Active" : "Inactive"}
                       />
                     </View>
-                    <Text className="text-xs text-muted-foreground leading-4" numberOfLines={2}>
+                    <Text
+                      className="text-xs text-muted-foreground leading-4"
+                      numberOfLines={2}
+                    >
                       {service.description}
                     </Text>
                   </View>
                   <Text className="font-extrabold text-base text-accent">
-                    ${service.basePriceMedium?.toFixed(2) || service.basePrice?.toFixed(2) || "0.00"}
+                    $
+                    {service.basePriceMedium?.toFixed(2) ||
+                      service.basePrice?.toFixed(2) ||
+                      "0.00"}
                   </Text>
                 </View>
 
-                {/* Sizing Price Badges */}
                 <View className="flex-row items-center justify-between border-t border-border pt-2.5">
                   <View className="flex-row gap-2">
                     {service.basePriceSmall ? (
-                      <Badge variant="secondary" size="sm" label={`Sm: $${service.basePriceSmall}`} />
+                      <Badge
+                        variant="secondary"
+                        size="sm"
+                        label={`Sm: $${service.basePriceSmall}`}
+                      />
                     ) : null}
                     {service.basePriceMedium ? (
-                      <Badge variant="secondary" size="sm" label={`Med: $${service.basePriceMedium}`} />
+                      <Badge
+                        variant="secondary"
+                        size="sm"
+                        label={`Med: $${service.basePriceMedium}`}
+                      />
                     ) : null}
                     {service.basePriceLarge ? (
-                      <Badge variant="secondary" size="sm" label={`Lg: $${service.basePriceLarge}`} />
+                      <Badge
+                        variant="secondary"
+                        size="sm"
+                        label={`Lg: $${service.basePriceLarge}`}
+                      />
                     ) : null}
                   </View>
                   <View className="flex-row items-center gap-1">
                     <Clock size={13} color={THEME.light.mutedForeground} />
-                    <Text className="text-xs text-muted-foreground">{service.duration} mins</Text>
+                    <Text className="text-xs text-muted-foreground">
+                      {service.duration} mins
+                    </Text>
                   </View>
                 </View>
               </Pressable>
@@ -156,53 +222,94 @@ export default function AdminServicesScreen() {
         />
       )}
 
-      {/* Service Detail Modal */}
       <Modal
         visible={Boolean(selectedService)}
         onClose={() => setSelectedService(null)}
         title={selectedService?.name || "Service Details"}
-        description={selectedService?.serviceType ? `${selectedService.serviceType.toUpperCase()} Tier` : "Package"}
+        description={
+          selectedService?.serviceType
+            ? `${selectedService.serviceType.toUpperCase()} Tier`
+            : "Package"
+        }
       >
         {selectedService ? (
-          <View className="gap-4">
-            <Text className="text-sm text-muted-foreground leading-5">
-              {selectedService.description}
-            </Text>
-
-            {/* Sizing Matrix */}
-            <View className="rounded-2xl border border-border bg-secondary/50 p-4 gap-2.5">
-              <Text className="font-bold text-xs uppercase tracking-wider text-muted-foreground">
-                Pricing by Vehicle Size
-              </Text>
-              <View className="flex-row justify-between border-b border-border/50 pb-2">
-                <Text className="text-xs text-muted-foreground">Small / Compact / Moto</Text>
-                <Text className="font-bold text-xs">
-                  ${selectedService.basePriceSmall?.toFixed(2) || "N/A"}
+          <ScrollView
+            contentContainerStyle={{ gap: 16, paddingBottom: 12 }}
+            style={{ maxHeight: 540 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Input
+              label="Service name"
+              value={name}
+              onChangeText={setName}
+              placeholder="Service name"
+            />
+            <Input
+              label="Description"
+              value={description}
+              onChangeText={setDescription}
+              placeholder="What is included?"
+              multiline
+              className="h-24"
+            />
+            <View className="flex-row gap-2">
+              <View className="flex-1 gap-1">
+                <Text className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Small
                 </Text>
+                <Input
+                  value={smallPrice}
+                  onChangeText={setSmallPrice}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                />
               </View>
-              <View className="flex-row justify-between border-b border-border/50 pb-2">
-                <Text className="text-xs text-muted-foreground">Mid-Size Sedan / Standard</Text>
-                <Text className="font-bold text-xs">
-                  ${selectedService.basePriceMedium?.toFixed(2) || "N/A"}
+              <View className="flex-1 gap-1">
+                <Text className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Medium
                 </Text>
+                <Input
+                  value={mediumPrice}
+                  onChangeText={setMediumPrice}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                />
               </View>
-              <View className="flex-row justify-between">
-                <Text className="text-xs text-muted-foreground">Large SUV / Truck / Van</Text>
-                <Text className="font-bold text-xs">
-                  ${selectedService.basePriceLarge?.toFixed(2) || "N/A"}
+              <View className="flex-1 gap-1">
+                <Text className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Large
                 </Text>
+                <Input
+                  value={largePrice}
+                  onChangeText={setLargePrice}
+                  keyboardType="decimal-pad"
+                  placeholder="0"
+                />
               </View>
             </View>
-
-            {/* Active Toggle */}
+            <Input
+              label="Duration (minutes)"
+              value={duration}
+              onChangeText={setDuration}
+              keyboardType="number-pad"
+              placeholder="60"
+            />
             <Switch
               label="Available for Online Booking"
               description="When active, customers can select this service in the booking flow."
-              value={selectedService.isActive}
-              onValueChange={(val) => handleToggleActive(selectedService, val)}
-              disabled={isUpdating}
+              value={isActive}
+              onValueChange={setIsActive}
             />
-          </View>
+            <Button
+              onPress={handleSaveService}
+              disabled={isUpdating}
+              className="w-full flex-row items-center justify-center gap-2"
+            >
+              <Text className="font-bold text-primary-foreground">
+                {isUpdating ? "Saving..." : "Save Service"}
+              </Text>
+            </Button>
+          </ScrollView>
         ) : null}
       </Modal>
     </Screen>

@@ -14,6 +14,8 @@ export function Screen({
       ref={scrollRef as any}
       className="flex-1 bg-background"
       contentInsetAdjustmentBehavior="automatic"
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
       contentContainerStyle={{ gap: 24, paddingHorizontal: 20, paddingTop: 24, paddingBottom: 140 }}
     >
       {children}

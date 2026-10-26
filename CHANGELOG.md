@@ -4,6 +4,9 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Mobile Production Parity**: The Expo app now captures email marketing consent in booking and onboarding, supports Maintenance Club subscription checkout and promo codes, submits reviews, exposes marketing preferences, and includes editable admin settings, invoice status actions, customer detail/notes, service pricing edits, and a business analytics screen.
+- **Mobile Native UI Pass**: Added liquid-glass surfaces with blur/solid fallbacks, native tab minimization and tinting, Expo UI switches, press feedback with haptics, and native-feeling modals and forms.
+- **Mobile Release Readiness**: Added the EAS project link and build profiles, a 1024px app icon, branded splash and Android adaptive icons, aligned Expo SDK 57 dependencies, moved `expo-dev-client` to dev dependencies, and added a native CI workflow that typechecks and exports the iOS bundle.
 - **Email Marketing Consent**: Added an optional email marketing opt-in to the booking flow and onboarding, stored with the booking draft and carried to the customer profile on conversion.
 - **Win-Back Email Preview**: Added a Club-first win-back email template and an admin audience preview for lapsed customers and older abandoned carts, with consent, suppression, active-membership, and upcoming-appointment exclusions.
 - **Abandoned Booking Recovery Campaigns**: Added a consent-aware membership campaign system with audience preview, test sends, batched delivery, per-recipient tracking, campaign history, and a public unsubscribe flow. The admin abandoned-checkout table now supports selection, service filtering, CSV export, per-row recovery sends, and bulk Maintenance Club offers.
@@ -18,6 +21,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Native SMS Consent Default**: The native booking flow now defaults SMS updates to off instead of pre-checking consent.
 - **Admin Recovery Exclusion**: Exclude admin and team accounts from automatic recovery and win-back audiences, while preserving the owner allowlist for the test recovery email.
 - **Recovery Sweep Customer Exclusions**: Skip expired Maintenance Refresh drafts whose email or name matches an existing customer with appointments, invoices, or subscriptions. The owner's test email is allowlisted so the real email can still be reviewed.
 - **Unsubscribe Page Access**: Allow `/unsubscribe` through the Clerk middleware so campaign recipients can manage email preferences without signing in.

@@ -1,10 +1,10 @@
 import * as React from "react";
-import { Alert, View } from "react-native";
+import { Alert, Linking, View } from "react-native";
 import { useClerk, useUser } from "@clerk/expo";
 import { UserButton } from "@clerk/expo/native";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
-import { LogOut, MapPin, Phone } from "lucide-react-native";
+import { LogOut, Mail, MapPin, Phone } from "lucide-react-native";
 
 import { Screen, ScreenHeader } from "@/components/screen";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +22,10 @@ export default function ProfileScreen() {
   const updateUserProfile = useMutation(api.users.updateUserProfile);
 
   const [isUpdatingSms, setIsUpdatingSms] = React.useState(false);
+  const [isUpdatingMarketing, setIsUpdatingMarketing] = React.useState(false);
   const isSmsOptedIn = currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn ?? false;
+  const isMarketingOptedIn =
+    currentUser?.notificationPreferences?.marketingEmails ?? false;
 
   const handleToggleSms = async (value: boolean) => {
     setIsUpdatingSms(true);
@@ -37,6 +40,22 @@ export default function ProfileScreen() {
       Alert.alert("Error", msg);
     } finally {
       setIsUpdatingSms(false);
+    }
+  };
+
+  const handleToggleMarketing = async (value: boolean) => {
+    setIsUpdatingMarketing(true);
+    try {
+      await updateUserProfile({
+        notificationPreferences: {
+          marketingEmails: value,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to update marketing preferences";
+      Alert.alert("Error", msg);
+    } finally {
+      setIsUpdatingMarketing(false);
     }
   };
 
@@ -103,6 +122,38 @@ export default function ProfileScreen() {
           onValueChange={handleToggleSms}
           disabled={isUpdatingSms}
         />
+        <Switch
+          label="Marketing Emails"
+          description="Receive maintenance tips, member offers, and seasonal promotions. Unsubscribe anytime."
+          value={isMarketingOptedIn}
+          onValueChange={handleToggleMarketing}
+          disabled={isUpdatingMarketing}
+        />
+      </View>
+
+      {/* Support */}
+      <View className="gap-2.5">
+        <Text className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Support
+        </Text>
+        <View className="flex-row gap-2">
+          <Button
+            variant="outline"
+            className="flex-1 flex-row items-center justify-center gap-2"
+            onPress={() => Linking.openURL("tel:+15014547140")}
+          >
+            <Phone size={15} color={THEME.light.foreground} />
+            <Text className="text-sm font-semibold">Call</Text>
+          </Button>
+          <Button
+            variant="outline"
+            className="flex-1 flex-row items-center justify-center gap-2"
+            onPress={() => Linking.openURL("mailto:dustin@rivercitymd.com")}
+          >
+            <Mail size={15} color={THEME.light.foreground} />
+            <Text className="text-sm font-semibold">Email</Text>
+          </Button>
+        </View>
       </View>
 
       {/* Sign Out */}

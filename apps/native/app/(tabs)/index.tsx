@@ -10,6 +10,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { Screen, ScreenHeader } from "@/components/screen";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { GlassSurface } from "@/components/ui/glass-surface";
 import { Text } from "@/components/ui/text";
 import { Badge } from "@/components/ui/badge";
 import { THEME } from "@/lib/theme";
@@ -47,18 +48,28 @@ export default function OverviewScreen() {
   return (
     <Screen>
       {/* Brand Header */}
-      <View className="flex-row items-center justify-between">
-        <View className="flex-row items-center gap-3">
-          <BrandMark />
-          <View className="gap-0.5">
-            <Text className="text-xs font-bold tracking-wider text-muted-foreground">
-              RiverCityMD
-            </Text>
-            <Text className="text-base font-semibold">Customer Portal</Text>
+      <GlassSurface style={{ borderRadius: 22, padding: 12 }}>
+        <View className="flex-row items-center justify-between gap-3">
+          <View className="flex-row items-center gap-3">
+            <BrandMark />
+            <View className="gap-0.5">
+              <Text className="text-xs font-bold tracking-wider text-muted-foreground">
+                RiverCityMD
+              </Text>
+              <Text className="text-base font-semibold">Customer Portal</Text>
+            </View>
           </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Book a detail"
+            onPress={() => router.push("/book")}
+            className="flex-row items-center gap-1.5 rounded-full bg-accent px-3 py-2 active:opacity-80"
+          >
+            <Plus size={15} color="#fff" />
+            <Text className="text-xs font-bold text-white">Book</Text>
+          </Pressable>
         </View>
-        <View className="h-2.5 w-2.5 rounded-full bg-accent" />
-      </View>
+      </GlassSurface>
 
       <ScreenHeader
         eyebrow="Mobile Detailing Service"
