@@ -4,10 +4,10 @@ import {
   Alert,
   Pressable,
   ScrollView,
-  Switch,
   View,
 } from "react-native";
 import * as Linking from "expo-linking";
+import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
@@ -45,6 +45,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { Text } from "@/components/ui/text";
 import {
   AddressSearch,
@@ -127,6 +128,9 @@ export default function BookScreen() {
   const createOrUpdateDraft = useAction(api.bookingDrafts.createOrUpdate);
   const createBookingCheckout = useAction(api.payments.createBookingCheckout);
   const confirmBookingCheckout = useAction(api.payments.confirmBookingCheckout);
+  const validateBookingPromoCode = useAction(
+    api.payments.validateBookingPromoCode,
+  );
 
   const [step, setStep] = React.useState<1 | 2 | 3 | 4 | 5>(1);
   const [isLoading, setIsLoading] = React.useState(false);
@@ -172,7 +176,38 @@ export default function BookScreen() {
   const [activeNestedCategory, setActiveNestedCategory] = React.useState<Record<string, string>>({});
 
   const [paymentOption, setPaymentOption] = React.useState<"deposit" | "full" | "in_person">("deposit");
-  const [smsOptIn, setSmsOptIn] = React.useState(true);
+  const [smsOptIn, setSmsOptIn] = React.useState(
+    currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn ?? false,
+  );
+  const [marketingEmails, setMarketingEmails] = React.useState(
+    currentUser?.notificationPreferences?.marketingEmails ?? false,
+  );
+  const [promoCodeInput, setPromoCodeInput] = React.useState("");
+  const [appliedCoupon, setAppliedCoupon] = React.useState<{
+    code: string;
+    discountType: "percent" | "amount";
+    discountValue: number;
+    discountAmount: number;
+  } | null>(null);
+  const [promoStatus, setPromoStatus] = React.useState<
+    "idle" | "checking" | "valid" | "invalid"
+  >("idle");
+  const [promoError, setPromoError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const optedIn =
+      currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn;
+    if (optedIn !== undefined) {
+      setSmsOptIn(optedIn);
+    }
+  }, [currentUser?.notificationPreferences?.operationalSmsConsent?.optedIn]);
+
+  React.useEffect(() => {
+    const optedIn = currentUser?.notificationPreferences?.marketingEmails;
+    if (optedIn !== undefined) {
+      setMarketingEmails(optedIn);
+    }
+  }, [currentUser?.notificationPreferences?.marketingEmails]);
 
   const scrollRef = React.useRef<ScrollView>(null);
 
@@ -221,6 +256,114 @@ export default function BookScreen() {
 
     return list;
   }, [selectedVehicles, adHocVehicles]);
+
+  const maintenancePlan = React.useMemo(() => {
+    return (
+      (allServices ?? []).find(
+        (service) =>
+          service.isActive &&
+          service.serviceType === "subscription" &&
+          (service.includedServiceIds?.length ?? 0) > 0 &&
+          (service.subscriptionFrequencies?.length ?? 0) > 0,
+      ) ?? null
+    );
+  }, [allServices]);
+  const maintenancePlanIncludedServiceIds =
+    maintenancePlan?.includedServiceIds ?? [];
+  const maintenanceIncludedServiceNames = maintenancePlanIncludedServiceIds
+    .map((id) => (allServices ?? []).find((service) => service._id === id)?.name)
+    .filter(Boolean)
+    .join(", ");
+  const availableFrequencies = maintenancePlan?.subscriptionFrequencies ?? [];
+  const [subscriptionSelections, setSubscriptionSelections] = React.useState<
+    Record<string, boolean>
+  >({});
+  const [subscriptionFrequency, setSubscriptionFrequency] = React.useState<
+    "monthly" | "biweekly"
+  >("monthly");
+  const effectiveSubscriptionFrequency = availableFrequencies.includes(
+    subscriptionFrequency,
+  )
+    ? subscriptionFrequency
+    : (availableFrequencies[0] ?? "monthly");
+
+  const maintenanceEligibleVehicles = React.useMemo(() => {
+    if (!maintenancePlan || maintenancePlanIncludedServiceIds.length === 0) {
+      return [];
+    }
+
+    return targetVehicles
+      .map((vehicle, index) => {
+        const selectedIds = vehicleServices[vehicle.key] || [];
+        const selectedServices = (allServices ?? []).filter((service) =>
+          selectedIds.includes(service._id),
+        );
+        const hasAllIncluded = maintenancePlanIncludedServiceIds.every((id) =>
+          selectedIds.includes(id),
+        );
+        const hasOtherCoreOrUpgrade = selectedServices.some(
+          (service) =>
+            !maintenancePlanIncludedServiceIds.includes(service._id) &&
+            service.serviceType !== "addon" &&
+            service.bookingRole !== "addon",
+        );
+        const context = {
+          vehicleSize: vehicle.size,
+          vehicleTypeId: vehicle.vehicleTypeId ?? null,
+        };
+        const planPricing = getEffectiveServicePricingForVehicle(
+          maintenancePlan,
+          context,
+        );
+        const includedService = selectedServices.find((service) =>
+          maintenancePlanIncludedServiceIds.includes(service._id),
+        );
+        const includedPricing = includedService
+          ? getEffectiveServicePricingForVehicle(includedService, context)
+          : null;
+
+        return {
+          index,
+          vehicle,
+          eligible:
+            hasAllIncluded &&
+            !hasOtherCoreOrUpgrade &&
+            planPricing.isAvailable &&
+            planPricing.price > 0,
+          planPrice: planPricing.price,
+          savings: Math.max(
+            0,
+            (includedPricing?.price ?? 0) - planPricing.price,
+          ),
+        };
+      })
+      .filter((candidate) => candidate.eligible);
+  }, [
+    maintenancePlan,
+    maintenancePlanIncludedServiceIds,
+    targetVehicles,
+    vehicleServices,
+    allServices,
+  ]);
+
+  const enrolledMaintenanceVehicles = maintenanceEligibleVehicles.filter(
+    (candidate) => subscriptionSelections[candidate.vehicle.key],
+  );
+  const maintenanceSelected = enrolledMaintenanceVehicles.length > 0;
+  const maintenanceTotalPerCycle =
+    enrolledMaintenanceVehicles.reduce(
+      (sum, candidate) => sum + candidate.planPrice,
+      0,
+    ) +
+    enrolledMaintenanceVehicles.reduce(
+      (sum, candidate) =>
+        sum +
+        (candidate.vehicle.hasPet
+          ? getPetFeeForVehicle(candidate.vehicle.size)
+          : 0),
+      0,
+    ) +
+    (maintenanceSelected ? travelQuote?.fee ?? 0 : 0);
 
   // Helper to toggle vehicle selection from saved garage
   const toggleSavedVehicle = (v: Doc<"vehicles"> & { vehicleType?: Doc<"vehicleTypes"> | null }) => {
@@ -281,19 +424,43 @@ export default function BookScreen() {
       let serviceSubtotal = 0;
       let duration = 0;
       let petFees = 0;
+      const enrolledKeys = new Set(
+        enrolledMaintenanceVehicles.map(
+          (candidate) => candidate.vehicle.key,
+        ),
+      );
 
       targetVehicles.forEach((v) => {
         const sIds = vehicleServices[v.key] || [];
         const pricingCtx = { vehicleSize: v.size, vehicleTypeId: v.vehicleTypeId };
+        const isEnrolled = enrolledKeys.has(v.key);
 
         sIds.forEach((sid) => {
           const s = allServices?.find((x: Doc<"services">) => x._id === sid);
           if (s) {
+            if (
+              isEnrolled &&
+              maintenancePlanIncludedServiceIds.includes(
+                sid as Id<"services">,
+              )
+            ) {
+              return;
+            }
             const pricing = getEffectiveServicePricingForVehicle(s, pricingCtx);
             serviceSubtotal += pricing.price;
             duration += pricing.duration;
           }
         });
+
+        if (isEnrolled) {
+          const candidate = maintenanceEligibleVehicles.find(
+            (item) => item.vehicle.key === v.key,
+          );
+          if (candidate) {
+            serviceSubtotal += candidate.planPrice;
+            duration += maintenancePlan?.duration ?? 0;
+          }
+        }
 
         if (v.hasPet && petFeeSettings?.isActive !== false) {
           const fee = getPetFeeForVehicle(v.size);
@@ -306,8 +473,13 @@ export default function BookScreen() {
       const travelBuffer = travelQuote?.bufferMinutes ?? 0;
       const total = serviceSubtotal + petFees + travelFee;
       const depositPerVehicle = depositSettings?.amountPerVehicle ?? 50;
-      const calculatedDeposit = Math.min(depositPerVehicle * Math.max(1, targetVehicles.length), total);
-      const due = paymentOption === "full" ? total : calculatedDeposit;
+      const calculatedDeposit = maintenanceSelected
+        ? 0
+        : Math.min(depositPerVehicle * Math.max(1, targetVehicles.length), total);
+      const due =
+        maintenanceSelected || paymentOption === "full"
+          ? total
+          : calculatedDeposit;
 
       return {
         totalServicePrice: serviceSubtotal,
@@ -317,7 +489,60 @@ export default function BookScreen() {
         depositTotal: calculatedDeposit,
         dueNow: due,
       };
-    }, [targetVehicles, vehicleServices, allServices, travelQuote, depositSettings, petFeeSettings, paymentOption, getPetFeeForVehicle]);
+    }, [
+      targetVehicles,
+      vehicleServices,
+      allServices,
+      travelQuote,
+      depositSettings,
+      petFeeSettings,
+      paymentOption,
+      getPetFeeForVehicle,
+      enrolledMaintenanceVehicles,
+      maintenanceEligibleVehicles,
+      maintenancePlan,
+      maintenancePlanIncludedServiceIds,
+      maintenanceSelected,
+    ]);
+
+  React.useEffect(() => {
+    if (maintenanceSelected) {
+      setPaymentOption("full");
+    }
+  }, [maintenanceSelected]);
+
+  const discountAmount = appliedCoupon?.discountAmount ?? 0;
+  const finalTotal = Math.max(0, grandTotal - discountAmount);
+
+  React.useEffect(() => {
+    setAppliedCoupon(null);
+    setPromoStatus("idle");
+    setPromoError(null);
+  }, [grandTotal]);
+
+  const handleApplyPromoCode = async () => {
+    const code = promoCodeInput.trim();
+    if (!code) return;
+    setPromoStatus("checking");
+    setPromoError(null);
+    try {
+      const result = await validateBookingPromoCode({
+        code,
+        orderTotal: grandTotal,
+      });
+      setAppliedCoupon(result);
+      setPromoStatus("valid");
+      void Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success,
+      );
+    } catch (error) {
+      setAppliedCoupon(null);
+      setPromoStatus("invalid");
+      setPromoError(
+        error instanceof Error ? error.message : "That promo code is not valid.",
+      );
+    }
+  };
 
   const canProceedToNext = () => {
     if (step === 1) {
@@ -406,6 +631,7 @@ export default function BookScreen() {
         email: currentUser.email || "",
         phone: currentUser.phone || "",
         smsOptIn,
+        marketingEmails,
         address: {
           street: address.street.trim(),
           city: address.city.trim(),
@@ -421,7 +647,17 @@ export default function BookScreen() {
         serviceIds: allServiceIds,
         scheduledDate,
         scheduledTime,
-        paymentOption,
+        paymentOption: maintenanceSelected ? "full" : paymentOption,
+        subscriptionIntent:
+          maintenanceSelected && maintenancePlan
+            ? {
+                planServiceId: maintenancePlan._id,
+                frequency: effectiveSubscriptionFrequency,
+                enrolledVehicleIndexes: enrolledMaintenanceVehicles.map(
+                  (candidate) => candidate.index,
+                ),
+              }
+            : undefined,
       });
 
       // Use the app's configured Expo scheme so Stripe can return to the
@@ -431,6 +667,7 @@ export default function BookScreen() {
       const { url } = await createBookingCheckout({
         draftId,
         origin: checkoutOrigin,
+        couponCode: appliedCoupon?.code ?? "",
       });
 
       if (!url) {
@@ -1431,17 +1668,154 @@ export default function BookScreen() {
                   </View>
                 ) : null}
 
+                {appliedCoupon && discountAmount > 0 ? (
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-xs text-muted-foreground">
+                      Promo ({appliedCoupon.code})
+                    </Text>
+                    <Text className="text-xs font-semibold text-emerald-600">
+                      -${discountAmount.toFixed(2)}
+                    </Text>
+                  </View>
+                ) : null}
+
                 <View className="flex-row items-center justify-between border-t border-border/50 pt-1.5 mt-0.5">
-                  <Text className="text-sm font-extrabold text-foreground">Total Service Price</Text>
+                  <Text className="text-sm font-extrabold text-foreground">Total</Text>
                   <Text className="text-base font-black text-accent">
-                    ${grandTotal.toFixed(2)}
+                    ${finalTotal.toFixed(2)}
                   </Text>
                 </View>
               </View>
             </CardContent>
           </Card>
 
-          {/* Compact Payment Option Tabs */}
+          <View className="gap-2">
+            <Text className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+              Promo code
+            </Text>
+            <View className="flex-row gap-2">
+              <Input
+                value={promoCodeInput}
+                onChangeText={(value) => {
+                  setPromoCodeInput(value);
+                  setPromoStatus("idle");
+                  setPromoError(null);
+                }}
+                placeholder="Enter code"
+                autoCapitalize="characters"
+                className="flex-1"
+              />
+              <Button
+                variant="outline"
+                onPress={handleApplyPromoCode}
+                disabled={promoStatus === "checking" || !promoCodeInput.trim()}
+              >
+                <Text className="text-xs font-semibold">
+                  {promoStatus === "checking" ? "Checking..." : "Apply"}
+                </Text>
+              </Button>
+            </View>
+            {appliedCoupon ? (
+              <Text className="text-xs text-emerald-600">
+                Code {appliedCoupon.code} applied — you save $
+                {discountAmount.toFixed(2)}.
+              </Text>
+            ) : null}
+            {promoStatus === "invalid" ? (
+              <Text className="text-xs text-destructive">
+                {promoError ?? "That promo code is not valid."}
+              </Text>
+            ) : null}
+          </View>
+
+          {maintenanceEligibleVehicles.length > 0 ? (
+            <Card className="border border-accent/30 bg-accent/5">
+              <CardContent className="gap-3 p-4">
+                <View className="flex-row items-start justify-between gap-3">
+                  <View className="flex-1 gap-0.5">
+                    <Text className="font-bold text-sm">
+                      {maintenancePlan?.name}
+                    </Text>
+                    <Text className="text-[11px] leading-4 text-muted-foreground">
+                      Replace the one-time {maintenanceIncludedServiceNames} with
+                      member pricing. Cancel anytime.
+                    </Text>
+                  </View>
+                  <Badge variant="accent" size="sm" label="Club" />
+                </View>
+
+                {maintenanceEligibleVehicles.map((candidate) => (
+                  <Switch
+                    key={candidate.vehicle.key}
+                    label={candidate.vehicle.label}
+                    description={`$${candidate.planPrice.toFixed(
+                      2,
+                    )}/month · save $${candidate.savings.toFixed(
+                      2,
+                    )} vs one-time`}
+                    value={Boolean(
+                      subscriptionSelections[candidate.vehicle.key],
+                    )}
+                    onValueChange={(checked) =>
+                      setSubscriptionSelections((prev) => ({
+                        ...prev,
+                        [candidate.vehicle.key]: checked,
+                      }))
+                    }
+                  />
+                ))}
+
+                {availableFrequencies.length > 1 ? (
+                  <View className="flex-row gap-2">
+                    {availableFrequencies.map((frequency) => (
+                      <Pressable
+                        key={frequency}
+                        accessibilityRole="button"
+                        onPress={() => setSubscriptionFrequency(frequency)}
+                        className={`flex-1 rounded-xl border px-3 py-2 ${
+                          effectiveSubscriptionFrequency === frequency
+                            ? "border-accent bg-accent/10"
+                            : "border-border bg-card"
+                        }`}
+                      >
+                        <Text
+                          className={`text-center text-xs font-bold ${
+                            effectiveSubscriptionFrequency === frequency
+                              ? "text-accent"
+                              : "text-foreground"
+                          }`}
+                        >
+                          {frequency === "monthly" ? "Monthly" : "Biweekly"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+
+                {maintenanceSelected ? (
+                  <View className="gap-1 rounded-xl border border-border bg-card p-3">
+                    <Text className="text-xs font-semibold text-muted-foreground">
+                      Membership due today
+                    </Text>
+                    <Text className="text-xl font-extrabold text-accent">
+                      ${maintenanceTotalPerCycle.toFixed(2)}
+                    </Text>
+                    <Text className="text-[11px] text-muted-foreground">
+                      Then ${maintenanceTotalPerCycle.toFixed(2)} each{" "}
+                      {effectiveSubscriptionFrequency === "monthly"
+                        ? "month"
+                        : "two weeks"}
+                      . Includes pet and travel fees.
+                    </Text>
+                  </View>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {!maintenanceSelected ? (
+            <>
+              {/* Compact Payment Option Tabs */}
           <View className="gap-1.5">
             <Text className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               Payment Option
@@ -1486,7 +1860,7 @@ export default function BookScreen() {
                   Pay in Full
                 </Text>
                 <Text className="text-[10px] text-muted-foreground mt-0.5">
-                  ${grandTotal.toFixed(2)} today
+                  ${finalTotal.toFixed(2)} today
                 </Text>
               </Pressable>
 
@@ -1514,23 +1888,28 @@ export default function BookScreen() {
 
             <Text className="text-[11px] text-muted-foreground px-0.5">
               {paymentOption === "deposit"
-                ? `Pay $${depositTotal.toFixed(2)} deposit now. Remaining $${(grandTotal - depositTotal).toFixed(2)} invoiced after service.`
+                ? `Pay $${depositTotal.toFixed(2)} deposit now. Remaining $${Math.max(0, finalTotal - depositTotal).toFixed(2)} invoiced after service.`
                 : paymentOption === "full"
-                  ? `Pay full $${grandTotal.toFixed(2)} upfront securely via Stripe.`
-                  : `Pay $${depositTotal.toFixed(2)} deposit now. Pay remaining $${(grandTotal - depositTotal).toFixed(2)} via cash or card at appointment.`}
+                  ? `Pay full $${finalTotal.toFixed(2)} upfront securely via Stripe.`
+                  : `Pay $${depositTotal.toFixed(2)} deposit now. Pay remaining $${Math.max(0, finalTotal - depositTotal).toFixed(2)} via cash or card at appointment.`}
             </Text>
           </View>
+            </>
+          ) : null}
 
-          {/* SMS Updates Toggle (Compact) */}
-          <View className="flex-row items-center justify-between rounded-xl bg-card border border-border/80 px-3.5 py-2">
-            <View className="flex-1 pr-2">
-              <Text className="font-semibold text-xs text-foreground">SMS Arrival Updates</Text>
-              <Text className="text-[10px] text-muted-foreground">
-                Live text alerts when tech is en route.
-              </Text>
-            </View>
-            <Switch value={smsOptIn} onValueChange={setSmsOptIn} />
-          </View>
+          {/* Notification Preferences */}
+          <Switch
+            label="SMS Arrival Updates"
+            description="Live text alerts when your technician is en route."
+            value={smsOptIn}
+            onValueChange={setSmsOptIn}
+          />
+          <Switch
+            label="Email me occasional offers"
+            description="Maintenance tips, member offers, and seasonal promotions. Unsubscribe anytime."
+            value={marketingEmails}
+            onValueChange={setMarketingEmails}
+          />
 
           {/* Final Submit Button */}
           <Button
@@ -1544,9 +1923,11 @@ export default function BookScreen() {
             ) : (
               <>
                 <Text className="font-bold text-primary-foreground">
-                  {paymentOption === "full"
-                    ? `Pay $${grandTotal.toFixed(2)} & Book`
-                    : `Pay $${depositTotal.toFixed(2)} Deposit & Book`}
+                  {maintenanceSelected
+                    ? `Start Membership · $${finalTotal.toFixed(2)} today`
+                    : paymentOption === "full"
+                      ? `Pay $${finalTotal.toFixed(2)} & Book`
+                      : `Pay $${depositTotal.toFixed(2)} Deposit & Book`}
                 </Text>
                 <CheckCircle2 size={18} color={THEME.light.primaryForeground} />
               </>

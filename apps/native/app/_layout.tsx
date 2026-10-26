@@ -63,6 +63,7 @@ export default function RootLayout() {
                   <Stack.Screen name="booking/success" options={{ headerShown: false }} />
                   <Stack.Screen name="booking/cancelled" options={{ headerShown: false }} />
                   <Stack.Screen name="vehicles/[id]" options={{ headerShown: false }} />
+                  <Stack.Screen name="analytics" options={{ headerShown: false }} />
                   <Stack.Screen name="+not-found" />
                 </Stack>
               </AuthGuard>

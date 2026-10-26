@@ -1,7 +1,13 @@
 import { useQuery } from "convex/react";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { DynamicColorIOS, Platform } from "react-native";
 
 import { api } from "@rivercitymd/backend/convex/_generated/api";
+
+const tintColor =
+  Platform.OS === "ios"
+    ? DynamicColorIOS({ light: "#2a8fa8", dark: "#4db3c9" })
+    : "#2a8fa8";
 
 export default function TabsLayout() {
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -15,7 +21,7 @@ export default function TabsLayout() {
   ).length;
 
   return (
-    <NativeTabs>
+    <NativeTabs minimizeBehavior="onScrollDown" tintColor={tintColor}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>Overview</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="rectangle.grid.2x2.fill" md="dashboard" />

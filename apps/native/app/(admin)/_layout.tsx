@@ -1,8 +1,14 @@
 import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { DynamicColorIOS, Platform } from "react-native";
+
+const tintColor =
+  Platform.OS === "ios"
+    ? DynamicColorIOS({ light: "#2a8fa8", dark: "#4db3c9" })
+    : "#2a8fa8";
 
 export default function AdminTabsLayout() {
   return (
-    <NativeTabs>
+    <NativeTabs minimizeBehavior="onScrollDown" tintColor={tintColor}>
       <NativeTabs.Trigger name="index">
         <NativeTabs.Trigger.Label>Overview</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="chart.bar.fill" md="dashboard" />

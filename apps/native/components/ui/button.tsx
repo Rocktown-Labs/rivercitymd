@@ -1,7 +1,15 @@
 import { TextClassContext } from '@/components/ui/text';
 import { cn } from '@/lib/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
+import * as Haptics from 'expo-haptics';
 import { Platform, Pressable } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const buttonVariants = cva(
   cn(
@@ -90,12 +98,33 @@ const buttonTextVariants = cva(
 
 type ButtonProps = React.ComponentProps<typeof Pressable> & React.RefAttributes<typeof Pressable> & VariantProps<typeof buttonVariants>;
 
-function Button({ className, variant, size, ...props }: ButtonProps) {
+function Button({ className, variant, size, onPressIn, onPressOut, onPress, disabled, style, ...props }: ButtonProps) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.get() }],
+  }));
+
   return (
     <TextClassContext.Provider value={buttonTextVariants({ variant, size })}>
-      <Pressable
-        className={cn(props.disabled && 'opacity-50', buttonVariants({ variant, size }), className)}
+      <AnimatedPressable
+        className={cn(disabled && 'opacity-50', buttonVariants({ variant, size }), className)}
         role="button"
+        disabled={disabled}
+        style={[style, animatedStyle]}
+        onPressIn={(event) => {
+          scale.set(withTiming(0.97, { duration: 120 }));
+          onPressIn?.(event);
+        }}
+        onPressOut={(event) => {
+          scale.set(withTiming(1, { duration: 160 }));
+          onPressOut?.(event);
+        }}
+        onPress={(event) => {
+          if (Platform.OS === 'ios' && !disabled) {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          }
+          onPress?.(event);
+        }}
         {...props}
       />
     </TextClassContext.Provider>

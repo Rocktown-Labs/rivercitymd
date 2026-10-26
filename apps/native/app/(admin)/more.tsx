@@ -6,6 +6,7 @@ import { router } from "expo-router";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import {
   AlertCircle,
+  BarChart3,
   CreditCard,
   FileText,
   LogOut,
@@ -36,6 +37,14 @@ export default function AdminMoreScreen() {
   const outOfAreaRequestCount = useQuery(api.bookingDrafts.getOutOfAreaRequestCount, isAdmin ? {} : "skip") ?? 0;
 
   const menuItems = [
+    {
+      title: "Analytics",
+      description: "Revenue, bookings, retention, and top service trends.",
+      icon: <BarChart3 size={20} color={THEME.light.accent} />,
+      route: "/analytics",
+      badgeCount: 0,
+      badgeVariant: "secondary" as const,
+    },
     {
       title: "Payments & Invoices",
       description: "Track customer billing, unpaid invoices, and Stripe deposits.",

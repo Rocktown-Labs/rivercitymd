@@ -1,0 +1,42 @@
+name: Native App
+
+on:
+  pull_request:
+    paths:
+      - "apps/native/**"
+      - "packages/backend/**"
+      - "packages/env/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/native.yml"
+  push:
+    branches: [master]
+    paths:
+      - "apps/native/**"
+      - "packages/backend/**"
+      - "packages/env/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/native.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_CONVEX_URL: ${{ vars.EXPO_PUBLIC_CONVEX_URL || 'https://dynamic-okapi-82.convex.cloud' }}
+      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+      EXPO_NO_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.13.0"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Expo dependency alignment
+        run: pnpm --filter native exec expo install --check
+      - name: Typecheck native app
+        run: pnpm --filter native typecheck
+      - name: Export iOS bundle
+        run: pnpm --filter native exec expo export --platform ios --output-dir /tmp/native-export

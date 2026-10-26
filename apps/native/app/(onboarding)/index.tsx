@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { Text } from "@/components/ui/text";
 import {
   AddressSearch,
@@ -51,6 +52,7 @@ export default function OnboardingScreen() {
     currentUser?.name || user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "",
   );
   const [phone, setPhone] = React.useState(currentUser?.phone || user?.primaryPhoneNumber?.phoneNumber || "");
+  const [marketingEmails, setMarketingEmails] = React.useState<boolean | undefined>(undefined);
   const [address, setAddress] = React.useState<AddressValue>({
     street: currentUser?.address?.street || "",
     city: currentUser?.address?.city || "",
@@ -150,6 +152,7 @@ export default function OnboardingScreen() {
       await createUserProfile({
         name: name.trim(),
         phone: phone.trim(),
+        marketingEmails,
         address: {
           street: address.street.trim(),
           city: address.city.trim(),
@@ -393,6 +396,13 @@ export default function OnboardingScreen() {
               )}
             </View>
           ) : null}
+
+          <Switch
+            label="Email me occasional offers"
+            description="Maintenance tips, member offers, and seasonal promotions. Unsubscribe anytime."
+            value={marketingEmails ?? false}
+            onValueChange={setMarketingEmails}
+          />
 
           {/* Continue Button */}
           <Button

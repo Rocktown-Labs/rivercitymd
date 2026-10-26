@@ -1,10 +1,14 @@
 import * as React from "react";
-import { Switch as RNSwitch, View, type SwitchProps as RNSwitchProps } from "react-native";
-import { THEME } from "@/lib/theme";
+import { View } from "react-native";
+import { Host, Switch as ExpoSwitch } from "@expo/ui";
+
 import { Text } from "@/components/ui/text";
 import { cn } from "@/lib/utils";
 
-export interface SwitchProps extends RNSwitchProps {
+export interface SwitchProps {
+  value?: boolean;
+  onValueChange?: (value: boolean) => void;
+  disabled?: boolean;
   label?: string;
   description?: string;
   containerClassName?: string;
@@ -14,9 +18,9 @@ export function Switch({
   label,
   description,
   containerClassName,
-  value,
-  onValueChange,
-  ...props
+  value = false,
+  onValueChange = () => {},
+  disabled = false,
 }: SwitchProps) {
   return (
     <View
@@ -28,20 +32,18 @@ export function Switch({
       <View className="flex-1 gap-0.5">
         {label ? <Text className="font-semibold">{label}</Text> : null}
         {description ? (
-          <Text className="text-xs leading-4 text-muted-foreground">{description}</Text>
+          <Text className="text-xs leading-4 text-muted-foreground">
+            {description}
+          </Text>
         ) : null}
       </View>
-      <RNSwitch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{
-          false: THEME.light.border,
-          true: THEME.light.accent,
-        }}
-        thumbColor={THEME.light.background}
-        ios_backgroundColor={THEME.light.border}
-        {...props}
-      />
+      <Host matchContents>
+        <ExpoSwitch
+          value={value}
+          onValueChange={onValueChange}
+          disabled={disabled}
+        />
+      </Host>
     </View>
   );
 }
