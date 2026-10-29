@@ -3,7 +3,7 @@ import "@/global.css";
 import { env } from "@rivercitymd/env/native";
 import { ClerkProvider, useAuth } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
-import { ConvexReactClient, useQuery } from "convex/react";
+import { ConvexReactClient, useMutation, useQuery } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { Stack, router, useSegments } from "expo-router";
 import { ThemeProvider } from "expo-router/react-navigation";
@@ -12,7 +12,7 @@ import { StatusBar } from "expo-status-bar";
 import { PortalHost } from "@rn-primitives/portal";
 import { useColorScheme } from "nativewind";
 import * as React from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { api } from "@rivercitymd/backend/convex/_generated/api";
@@ -20,6 +20,8 @@ import { NAV_THEME, THEME } from "@/lib/theme";
 import { BrandMark } from "@/components/brand-mark";
 import { Text } from "@/components/ui/text";
 import { AppViewProvider, useAppView } from "@/lib/app-view";
+import { NetworkBanner, NetworkProvider } from "@/lib/network";
+import { registerForPushNotificationsAsync } from "@/lib/push-notifications";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -49,25 +51,30 @@ export default function RootLayout() {
           <AppViewProvider>
             <StatusBar style={resolvedColorScheme === "dark" ? "light" : "dark"} />
             <GestureHandlerRootView style={styles.root}>
-              <AuthGuard>
-                <Stack screenOptions={{ headerShown: false }}>
-                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                  <Stack.Screen name="(admin)" options={{ headerShown: false }} />
-                  <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
-                  <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-                  <Stack.Screen
-                    name="book"
-                    options={{ headerShown: false, presentation: "modal" }}
-                  />
-                  <Stack.Screen name="appointments/[id]" options={{ headerShown: false }} />
-                  <Stack.Screen name="booking/success" options={{ headerShown: false }} />
-                  <Stack.Screen name="booking/cancelled" options={{ headerShown: false }} />
-                  <Stack.Screen name="vehicles/[id]" options={{ headerShown: false }} />
-                  <Stack.Screen name="analytics" options={{ headerShown: false }} />
-                  <Stack.Screen name="+not-found" />
-                </Stack>
-              </AuthGuard>
-              <PortalHost />
+              <NetworkProvider>
+                <NetworkBanner />
+                <AuthGuard>
+                  <Stack screenOptions={{ headerShown: false }}>
+                    <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                    <Stack.Screen name="(admin)" options={{ headerShown: false }} />
+                    <Stack.Screen name="(onboarding)" options={{ headerShown: false }} />
+                    <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                    <Stack.Screen
+                      name="book"
+                      options={{ headerShown: false, presentation: "modal" }}
+                    />
+                    <Stack.Screen name="appointments/[id]" options={{ headerShown: false }} />
+                    <Stack.Screen name="booking/success" options={{ headerShown: false }} />
+                    <Stack.Screen name="booking/cancelled" options={{ headerShown: false }} />
+                    <Stack.Screen name="booking/resume" options={{ headerShown: false }} />
+                    <Stack.Screen name="booking/claim" options={{ headerShown: false }} />
+                    <Stack.Screen name="vehicles/[id]" options={{ headerShown: false }} />
+                    <Stack.Screen name="analytics" options={{ headerShown: false }} />
+                    <Stack.Screen name="+not-found" />
+                  </Stack>
+                </AuthGuard>
+                <PortalHost />
+              </NetworkProvider>
             </GestureHandlerRootView>
           </AppViewProvider>
         </ThemeProvider>
@@ -82,12 +89,37 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   const segments = useSegments();
   const currentUser = useQuery(api.users.getCurrentUser, isSignedIn ? {} : "skip");
   const userRole = useQuery(api.auth.getUserRole, isSignedIn ? {} : "skip");
+  const registerPushToken = useMutation(api.push.registerPushToken);
 
   React.useEffect(() => {
     if (isLoaded) {
       void SplashScreen.hideAsync();
     }
   }, [isLoaded]);
+
+  React.useEffect(() => {
+    if (!isSignedIn) return;
+    let active = true;
+    void registerForPushNotificationsAsync()
+      .then((token) => {
+        if (!active || !token) return;
+        return registerPushToken({
+          token,
+          platform:
+            Platform.OS === "ios"
+              ? "ios"
+              : Platform.OS === "android"
+                ? "android"
+                : "web",
+        });
+      })
+      .catch((error) => {
+        console.warn("[push] registration failed", error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isSignedIn, registerPushToken]);
 
   React.useEffect(() => {
     if (!isLoaded) return;

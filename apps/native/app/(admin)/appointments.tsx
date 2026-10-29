@@ -1,6 +1,16 @@
 import * as React from "react";
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  View,
+} from "react-native";
 import { useMutation, useQuery } from "convex/react";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import type { Doc, Id } from "@rivercitymd/backend/convex/_generated/dataModel";
 import {
@@ -44,11 +54,35 @@ export default function AdminAppointmentsScreen() {
   const isAdmin = currentUser?.role === "admin";
   const appointments = useQuery(api.appointments.listWithDetails, isAdmin ? {} : "skip");
   const updateStatusMutation = useMutation(api.appointments.updateStatus);
+  const rescheduleMutation = useMutation(api.appointments.reschedule);
+  const updateAppointmentMutation = useMutation(api.appointments.update);
+  const generatePhotoUploadUrl = useMutation(
+    api.appointments.generateAppointmentPhotoUploadUrl,
+  );
+  const addAppointmentPhotos = useMutation(api.appointments.addAppointmentPhotos);
 
   const [filterStatus, setFilterStatus] = React.useState<string>("all");
   const [searchQuery, setSearchQuery] = React.useState<string>("");
   const [selectedAppointment, setSelectedAppointment] = React.useState<any | null>(null);
   const [isUpdatingStatus, setIsUpdatingStatus] = React.useState(false);
+  const [rescheduleDate, setRescheduleDate] = React.useState("");
+  const [rescheduleTime, setRescheduleTime] = React.useState("");
+  const [appointmentNotes, setAppointmentNotes] = React.useState("");
+  const [locationNotes, setLocationNotes] = React.useState("");
+  const [isSavingAppointment, setIsSavingAppointment] = React.useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = React.useState(false);
+  const appointmentDetails = useQuery(
+    api.appointments.getByIdWithDetails,
+    selectedAppointment ? { appointmentId: selectedAppointment._id } : "skip",
+  );
+
+  React.useEffect(() => {
+    if (!selectedAppointment) return;
+    setRescheduleDate(selectedAppointment.scheduledDate ?? "");
+    setRescheduleTime(selectedAppointment.scheduledTime ?? "");
+    setAppointmentNotes(selectedAppointment.notes ?? "");
+    setLocationNotes(selectedAppointment.location?.notes ?? "");
+  }, [selectedAppointment]);
 
   const filteredAppointments = (appointments || []).filter((apt: any) => {
     if (filterStatus !== "all" && apt.status !== filterStatus) return false;
@@ -75,6 +109,131 @@ export default function AdminAppointmentsScreen() {
       Alert.alert("Error", msg);
     } finally {
       setIsUpdatingStatus(false);
+    }
+  };
+
+  const handleReschedule = async () => {
+    if (!selectedAppointment) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rescheduleDate)) {
+      Alert.alert("Invalid date", "Use YYYY-MM-DD.");
+      return;
+    }
+    if (!/^\d{2}:\d{2}$/.test(rescheduleTime)) {
+      Alert.alert("Invalid time", "Use 24-hour HH:MM.");
+      return;
+    }
+    setIsSavingAppointment(true);
+    try {
+      await rescheduleMutation({
+        appointmentId: selectedAppointment._id,
+        newDate: rescheduleDate,
+        newTime: rescheduleTime,
+      });
+      setSelectedAppointment(null);
+      Alert.alert("Appointment rescheduled");
+    } catch (error) {
+      Alert.alert(
+        "Could not reschedule",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsSavingAppointment(false);
+    }
+  };
+
+  const handleSaveAppointment = async () => {
+    if (!selectedAppointment) return;
+    setIsSavingAppointment(true);
+    try {
+      await updateAppointmentMutation({
+        appointmentId: selectedAppointment._id,
+        userId: selectedAppointment.userId,
+        vehicleIds: selectedAppointment.vehicleIds,
+        serviceIds: selectedAppointment.serviceIds,
+        scheduledDate: rescheduleDate,
+        scheduledTime: rescheduleTime,
+        street: selectedAppointment.location.street,
+        city: selectedAppointment.location.city,
+        state: selectedAppointment.location.state,
+        zip: selectedAppointment.location.zip,
+        locationNotes: locationNotes.trim() || undefined,
+        notes: appointmentNotes.trim() || undefined,
+        petFeeVehicleIds: selectedAppointment.petFeeVehicleIds,
+        vehicleServices: selectedAppointment.vehicleServices,
+      });
+      setSelectedAppointment(null);
+      Alert.alert("Appointment updated");
+    } catch (error) {
+      Alert.alert(
+        "Could not update appointment",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsSavingAppointment(false);
+    }
+  };
+
+  const handleAddPhoto = async (stage: "before" | "after") => {
+    if (!selectedAppointment) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo access needed",
+        "Allow photo access to attach service photos.",
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    setIsUploadingPhoto(true);
+    try {
+      const contentType = asset.mimeType ?? "image/jpeg";
+      const fileName = asset.fileName ?? `photo-${Date.now()}.jpg`;
+      const upload = await generatePhotoUploadUrl({ fileName, contentType });
+      const uploadResult = await FileSystem.uploadAsync(upload.url, asset.uri, {
+        httpMethod: "PUT",
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers: { "Content-Type": contentType },
+      });
+      if (uploadResult.status < 200 || uploadResult.status >= 300) {
+        throw new Error(`Upload failed (${uploadResult.status})`);
+      }
+
+      const vehicle = selectedAppointment.vehicles?.[0];
+      await addAppointmentPhotos({
+        appointmentId: selectedAppointment._id,
+        stage,
+        photos: [
+          {
+            key: upload.key,
+            fileName,
+            contentType,
+            sizeBytes: asset.fileSize ?? 0,
+            uploadedAt: Date.now(),
+            vehicleId: vehicle?._id,
+            vehicleLabel: vehicle
+              ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+              : undefined,
+          },
+        ],
+      });
+      Alert.alert(
+        "Photo added",
+        `${stage === "before" ? "Before" : "After"} photo attached.`,
+      );
+    } catch (error) {
+      Alert.alert(
+        "Could not add photo",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsUploadingPhoto(false);
     }
   };
 
@@ -241,6 +400,108 @@ export default function AdminAppointmentsScreen() {
                   Notes: {selectedAppointment.location.notes}
                 </Text>
               ) : null}
+            </View>
+
+            {/* Edit & Reschedule */}
+            <View className="gap-3 rounded-2xl border border-border bg-secondary/50 p-4">
+              <Text className="font-bold text-sm">Edit appointment</Text>
+              <View className="flex-row gap-2">
+                <View className="flex-1">
+                  <Input
+                    label="Date"
+                    value={rescheduleDate}
+                    onChangeText={setRescheduleDate}
+                    placeholder="YYYY-MM-DD"
+                  />
+                </View>
+                <View className="flex-1">
+                  <Input
+                    label="Time"
+                    value={rescheduleTime}
+                    onChangeText={setRescheduleTime}
+                    placeholder="HH:MM"
+                  />
+                </View>
+              </View>
+              <Input
+                label="Appointment notes"
+                value={appointmentNotes}
+                onChangeText={setAppointmentNotes}
+                placeholder="Internal appointment notes"
+              />
+              <Input
+                label="Location notes"
+                value={locationNotes}
+                onChangeText={setLocationNotes}
+                placeholder="Gate code, parking, or driveway notes"
+              />
+              <View className="flex-row gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onPress={handleReschedule}
+                  disabled={isSavingAppointment}
+                >
+                  <Text className="text-xs font-semibold">Reschedule</Text>
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1"
+                  onPress={handleSaveAppointment}
+                  disabled={isSavingAppointment}
+                >
+                  <Text className="text-xs font-bold text-primary-foreground">
+                    Save edits
+                  </Text>
+                </Button>
+              </View>
+            </View>
+
+            <View className="gap-3 rounded-2xl border border-border bg-secondary/50 p-4">
+              <Text className="font-bold text-sm">Service Photos</Text>
+              <Text className="text-xs text-muted-foreground">
+                Before {appointmentDetails?.beforePhotos?.length ?? 0} · After{" "}
+                {appointmentDetails?.afterPhotos?.length ?? 0}
+              </Text>
+              <View className="flex-row gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onPress={() => handleAddPhoto("before")}
+                  disabled={isUploadingPhoto}
+                >
+                  <Text className="text-xs font-semibold">Add Before</Text>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onPress={() => handleAddPhoto("after")}
+                  disabled={isUploadingPhoto}
+                >
+                  <Text className="text-xs font-semibold">Add After</Text>
+                </Button>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 8 }}
+              >
+                {[
+                  ...(appointmentDetails?.beforePhotos ?? []),
+                  ...(appointmentDetails?.afterPhotos ?? []),
+                ]
+                  .filter((photo: any) => photo.signedUrl)
+                  .map((photo: any) => (
+                    <Image
+                      key={photo.key}
+                      source={{ uri: photo.signedUrl }}
+                      style={{ width: 84, height: 84, borderRadius: 10 }}
+                    />
+                  ))}
+              </ScrollView>
             </View>
 
             {/* Quick Status Transitions */}

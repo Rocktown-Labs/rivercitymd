@@ -2,6 +2,7 @@ import * as React from "react";
 import { ActivityIndicator, Alert, Pressable, View } from "react-native";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { router } from "expo-router";
+import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import {
   ArrowLeft,
   Clock,
@@ -58,21 +59,49 @@ function Field({
   );
 }
 
+const DAYS = [
+  { dayOfWeek: 0, label: "Sun" },
+  { dayOfWeek: 1, label: "Mon" },
+  { dayOfWeek: 2, label: "Tue" },
+  { dayOfWeek: 3, label: "Wed" },
+  { dayOfWeek: 4, label: "Thu" },
+  { dayOfWeek: 5, label: "Fri" },
+  { dayOfWeek: 6, label: "Sat" },
+] as const;
+
+type BusinessHour = {
+  dayOfWeek: number;
+  label: string;
+  startTime: string;
+  endTime: string;
+  isActive: boolean;
+};
+
 export default function AdminSettingsScreen() {
   const businessInfo = useQuery(api.business.get);
   const depositSettings = useQuery(api.depositSettings.get);
   const petFeeSettings = useQuery(api.petFeeSettings.get);
   const travelFeeSettings = useQuery(api.travelFeeSettings.get);
+  const businessHours = useQuery(api.availability.getBusinessHours);
 
   const updateBusiness = useMutation(api.business.update);
   const updateDeposit = useMutation(api.depositSettings.upsert);
   const updatePetFees = useMutation(api.petFeeSettings.upsert);
+  const setBusinessHours = useMutation(api.availability.setBusinessHours);
   const validateTravelOrigin = useAction(
     api.travelFeeSettings.validateOriginAndUpsert,
   );
 
   const [isEditing, setIsEditing] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  const [hours, setHours] = React.useState<BusinessHour[]>(() =>
+    DAYS.map((day) => ({
+      ...day,
+      startTime: "08:00",
+      endTime: "18:00",
+      isActive: day.dayOfWeek !== 0,
+    })),
+  );
 
   const [businessName, setBusinessName] = React.useState("");
   const [owner, setOwner] = React.useState("");
@@ -153,6 +182,23 @@ export default function AdminSettingsScreen() {
     isEditing,
   ]);
 
+  React.useEffect(() => {
+    if (!businessHours) return;
+    setHours(
+      DAYS.map((day) => {
+        const existing = businessHours.find(
+          (item) => item.dayOfWeek === day.dayOfWeek,
+        );
+        return {
+          ...day,
+          startTime: existing?.startTime ?? "08:00",
+          endTime: existing?.endTime ?? "18:00",
+          isActive: existing?.isActive ?? day.dayOfWeek !== 0,
+        };
+      }),
+    );
+  }, [businessHours]);
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
@@ -173,6 +219,14 @@ export default function AdminSettingsScreen() {
         basePriceLarge: toNumber(petLarge, 60),
         timeAddMinutes: toNumber(petTime, 30),
         isActive: petActive,
+      });
+      await setBusinessHours({
+        schedule: hours.map((hour) => ({
+          dayOfWeek: hour.dayOfWeek,
+          startTime: hour.startTime,
+          endTime: hour.endTime,
+          isActive: hour.isActive,
+        })),
       });
 
       try {
@@ -543,6 +597,89 @@ export default function AdminSettingsScreen() {
                   {travelFeeSettings?.longRangeFee ?? 0}
                 </Text>
               </View>
+            </View>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border border-border">
+        <CardContent className="gap-3 p-4">
+          <View className="flex-row items-center gap-2">
+            <Clock size={18} color={THEME.light.accent} />
+            <Text className="font-bold text-sm">Business Hours</Text>
+          </View>
+          {isEditing ? (
+            <View className="gap-2">
+              {hours.map((hour) => (
+                <View
+                  key={hour.dayOfWeek}
+                  className="flex-row items-center gap-2"
+                >
+                  <Text className="w-9 text-xs font-semibold">
+                    {hour.label}
+                  </Text>
+                  <Host matchContents>
+                    <ExpoSwitch
+                      value={hour.isActive}
+                      onValueChange={(value) =>
+                        setHours((prev) =>
+                          prev.map((item) =>
+                            item.dayOfWeek === hour.dayOfWeek
+                              ? { ...item, isActive: value }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                  </Host>
+                  <Input
+                    value={hour.startTime}
+                    onChangeText={(value) =>
+                      setHours((prev) =>
+                        prev.map((item) =>
+                          item.dayOfWeek === hour.dayOfWeek
+                            ? { ...item, startTime: value }
+                            : item,
+                        ),
+                      )
+                    }
+                    placeholder="08:00"
+                    className="h-10 flex-1"
+                  />
+                  <Input
+                    value={hour.endTime}
+                    onChangeText={(value) =>
+                      setHours((prev) =>
+                        prev.map((item) =>
+                          item.dayOfWeek === hour.dayOfWeek
+                            ? { ...item, endTime: value }
+                            : item,
+                        ),
+                      )
+                    }
+                    placeholder="18:00"
+                    className="h-10 flex-1"
+                  />
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View className="gap-1.5">
+              {hours
+                .filter((hour) => hour.isActive)
+                .map((hour) => (
+                  <View
+                    key={hour.dayOfWeek}
+                    className="flex-row items-center justify-between"
+                  >
+                    <Text className="text-xs text-muted-foreground">
+                      {hour.label}
+                    </Text>
+                    <Text className="text-xs font-semibold">
+                      {hour.startTime} – {hour.endTime}
+                    </Text>
+                  </View>
+                ))}
             </View>
           )}
         </CardContent>
