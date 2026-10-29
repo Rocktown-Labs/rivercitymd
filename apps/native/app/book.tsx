@@ -56,6 +56,7 @@ import { VehicleLookup, type VehicleLookupValue } from "@/components/forms/vehic
 import { TimeSlotPicker } from "@/components/forms/time-slot-picker";
 import { THEME } from "@/lib/theme";
 import { openAuthSession } from "@/lib/browser";
+import { useNetworkStatus } from "@/lib/network";
 
 import {
   getEffectiveServicePricingForVehicle,
@@ -117,6 +118,7 @@ interface VehicleSelection {
 
 export default function BookScreen() {
   const currentUser = useQuery(api.users.getCurrentUser);
+  const { isOnline } = useNetworkStatus();
   const myVehicles = useQuery(
     api.vehicles.getByUser,
     currentUser ? { userId: currentUser._id } : "skip",
@@ -590,6 +592,13 @@ export default function BookScreen() {
 
   const handleSubmitBooking = async () => {
     if (!currentUser) return;
+    if (!isOnline) {
+      Alert.alert(
+        "You're offline",
+        "Reconnect to the internet to finish your booking.",
+      );
+      return;
+    }
     setError(null);
     setIsLoading(true);
 
@@ -1912,9 +1921,14 @@ export default function BookScreen() {
           />
 
           {/* Final Submit Button */}
+          {!isOnline ? (
+            <Text className="text-center text-xs font-semibold text-amber-600">
+              You&apos;re offline. Reconnect to finish booking.
+            </Text>
+          ) : null}
           <Button
             size="lg"
-            disabled={isLoading}
+            disabled={isLoading || !isOnline}
             onPress={handleSubmitBooking}
             className="w-full flex-row items-center justify-center gap-2 mt-1 mb-8"
           >

@@ -7,6 +7,7 @@ import { api } from "@rivercitymd/backend/convex/_generated/api";
 import {
   AlertCircle,
   BarChart3,
+  BriefcaseBusiness,
   CreditCard,
   FileText,
   LogOut,
@@ -52,6 +53,22 @@ export default function AdminMoreScreen() {
       route: "/(admin)/payments",
       badgeCount: unpaidInvoicesCount,
       badgeVariant: "destructive" as const,
+    },
+    {
+      title: "Coupons",
+      description: "Create and manage Stripe discount codes.",
+      icon: <Tag size={20} color={THEME.light.accent} />,
+      route: "/(admin)/coupons",
+      badgeCount: 0,
+      badgeVariant: "secondary" as const,
+    },
+    {
+      title: "Memberships",
+      description: "Pause, resume, or cancel Maintenance Club subscriptions.",
+      icon: <BriefcaseBusiness size={20} color={THEME.light.accent} />,
+      route: "/(admin)/subscriptions",
+      badgeCount: 0,
+      badgeVariant: "secondary" as const,
     },
     {
       title: "Out-of-Area Requests",

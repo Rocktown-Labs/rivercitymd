@@ -2,10 +2,11 @@ import * as React from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useMutation, useQuery } from "convex/react";
 import * as Haptics from "expo-haptics";
+import { Host, Switch as ExpoSwitch } from "@expo/ui";
 import { Clock, Search } from "lucide-react-native";
 
 import { api } from "@rivercitymd/backend/convex/_generated/api";
-import type { Doc } from "@rivercitymd/backend/convex/_generated/dataModel";
+import type { Doc, Id } from "@rivercitymd/backend/convex/_generated/dataModel";
 import { EmptyState } from "@/components/empty-state";
 import { Screen, ScreenHeader } from "@/components/screen";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +47,15 @@ export default function AdminServicesScreen() {
   const [largePrice, setLargePrice] = React.useState("");
   const [duration, setDuration] = React.useState("");
   const [isActive, setIsActive] = React.useState(true);
+  const [vehiclePrices, setVehiclePrices] = React.useState<
+    Array<{
+      vehicleTypeId: Id<"vehicleTypes">;
+      vehicleTypeName: string;
+      price: string;
+      duration: string;
+      isAvailable: boolean;
+    }>
+  >([]);
 
   React.useEffect(() => {
     if (!selectedService) return;
@@ -56,6 +66,15 @@ export default function AdminServicesScreen() {
     setLargePrice(String(selectedService.basePriceLarge ?? ""));
     setDuration(String(selectedService.duration ?? ""));
     setIsActive(selectedService.isActive);
+    setVehiclePrices(
+      ((selectedService as any).vehiclePrices ?? []).map((row: any) => ({
+        vehicleTypeId: row.vehicleTypeId,
+        vehicleTypeName: row.vehicleType?.name ?? "Vehicle",
+        price: String(row.price ?? ""),
+        duration: String(row.duration ?? selectedService.duration ?? ""),
+        isAvailable: row.isAvailable ?? true,
+      })),
+    );
   }, [selectedService]);
 
   const filteredServices = (services || []).filter((service) => {
@@ -83,6 +102,13 @@ export default function AdminServicesScreen() {
         basePriceLarge: toNumber(largePrice, 0),
         duration: toNumber(duration, selectedService.duration),
         serviceType: selectedService.serviceType,
+        vehiclePrices: vehiclePrices.map((row) => ({
+          vehicleTypeId: row.vehicleTypeId,
+          vehicleTypeName: row.vehicleTypeName,
+          price: toNumber(row.price, 0),
+          duration: toNumber(row.duration, selectedService.duration),
+          isAvailable: row.isAvailable,
+        })),
         isActive,
       });
       await Haptics.notificationAsync(
@@ -287,6 +313,77 @@ export default function AdminServicesScreen() {
                 />
               </View>
             </View>
+
+            {vehiclePrices.length ? (
+              <View className="gap-2">
+                <Text className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Per-vehicle-type pricing
+                </Text>
+                {vehiclePrices.map((row, index) => (
+                  <View
+                    key={row.vehicleTypeId}
+                    className="gap-2 rounded-xl border border-border p-3"
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-xs font-semibold">
+                        {row.vehicleTypeName}
+                      </Text>
+                      <Host matchContents>
+                        <ExpoSwitch
+                          value={row.isAvailable}
+                          onValueChange={(value) =>
+                            setVehiclePrices((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, isAvailable: value }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </Host>
+                    </View>
+                    <View className="flex-row gap-2">
+                      <View className="flex-1">
+                        <Input
+                          label="Price"
+                          value={row.price}
+                          onChangeText={(value) =>
+                            setVehiclePrices((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, price: value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          keyboardType="decimal-pad"
+                          placeholder="0"
+                        />
+                      </View>
+                      <View className="flex-1">
+                        <Input
+                          label="Minutes"
+                          value={row.duration}
+                          onChangeText={(value) =>
+                            setVehiclePrices((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, duration: value }
+                                  : item,
+                              ),
+                            )
+                          }
+                          keyboardType="number-pad"
+                          placeholder="60"
+                        />
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
             <Input
               label="Duration (minutes)"
               value={duration}

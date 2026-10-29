@@ -38,6 +38,7 @@ import type * as lib_travelFees from "../lib/travelFees.js";
 import type * as notifications from "../notifications.js";
 import type * as payments from "../payments.js";
 import type * as petFeeSettings from "../petFeeSettings.js";
+import type * as push from "../push.js";
 import type * as r2 from "../r2.js";
 import type * as rateLimiter from "../rateLimiter.js";
 import type * as reviews from "../reviews.js";
@@ -94,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   payments: typeof payments;
   petFeeSettings: typeof petFeeSettings;
+  push: typeof push;
   r2: typeof r2;
   rateLimiter: typeof rateLimiter;
   reviews: typeof reviews;

@@ -837,9 +837,25 @@ export const getByIdWithDetails = query({
       }),
     );
 
+    const afterPhotos = await Promise.all(
+      (appointment.afterPhotos ?? []).map(async (photo) => {
+        let signedUrl: string | undefined;
+        try {
+          signedUrl = await r2.getUrl(photo.key, { expiresIn: 60 * 60 * 24 });
+        } catch (error) {
+          console.warn(
+            `[appointments] Failed to sign after photo URL ${photo.key}`,
+            error,
+          );
+        }
+        return { ...photo, signedUrl };
+      }),
+    );
+
     return {
       ...appointment,
       beforePhotos,
+      afterPhotos,
       user,
       services: servicesWithPricing,
       vehicles,
@@ -879,6 +895,56 @@ export const getByUser = query({
 });
 
 // Create appointment
+const appointmentPhotoValidator = v.object({
+  vehicleId: v.optional(v.id("vehicles")),
+  vehicleLabel: v.optional(v.string()),
+  key: v.string(),
+  fileName: v.string(),
+  contentType: v.string(),
+  sizeBytes: v.number(),
+  uploadedAt: v.number(),
+});
+
+export const generateAppointmentPhotoUploadUrl = mutation({
+  args: {
+    fileName: v.string(),
+    contentType: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    if (!args.contentType.startsWith("image/")) {
+      throw new ConvexError("Only image uploads are supported.");
+    }
+    const sanitizedFileName = args.fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const key = `appointment-photos/${Date.now()}-${crypto.randomUUID()}-${sanitizedFileName}`;
+    return await r2.generateUploadUrl(key);
+  },
+});
+
+export const addAppointmentPhotos = mutation({
+  args: {
+    appointmentId: v.id("appointments"),
+    stage: v.union(v.literal("before"), v.literal("after")),
+    photos: v.array(appointmentPhotoValidator),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const appointment = await ctx.db.get(args.appointmentId);
+    if (!appointment) throw new Error("Appointment not found");
+
+    if (args.stage === "before") {
+      await ctx.db.patch(args.appointmentId, {
+        beforePhotos: [...(appointment.beforePhotos ?? []), ...args.photos],
+      });
+    } else {
+      await ctx.db.patch(args.appointmentId, {
+        afterPhotos: [...(appointment.afterPhotos ?? []), ...args.photos],
+      });
+    }
+    return args.appointmentId;
+  },
+});
+
 export const create = mutation({
   args: {
     userId: v.id("users"),
@@ -1897,6 +1963,17 @@ export const updateStatus = mutation({
           },
         );
       }
+
+      if (shouldScheduleNotificationJobs()) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.push.sendAppointmentStatusPush,
+          {
+            appointmentId: args.appointmentId,
+            status: args.status,
+          },
+        );
+      }
     }
 
     // Appointment confirmation is the single trigger for post-deposit Stripe invoice generation
@@ -2079,6 +2156,17 @@ export const updateStatusInternal = internalMutation({
             appointmentId: args.appointmentId,
             event: lifecycleEvent,
             transition: `${oldStatus}->${args.status}`,
+          },
+        );
+      }
+
+      if (shouldScheduleNotificationJobs()) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.push.sendAppointmentStatusPush,
+          {
+            appointmentId: args.appointmentId,
+            status: args.status,
           },
         );
       }

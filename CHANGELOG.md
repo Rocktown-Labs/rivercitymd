@@ -4,6 +4,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Mobile Parity Completion**: The Expo app now manages Stripe coupons and Maintenance Club subscriptions, applies invoice discounts and reissues deposit invoices, edits and reschedules appointments, attaches before/after service photos, edits business hours and per-vehicle-type pricing, resumes abandoned checkout or claims a converted booking, registers for push notifications, and shows an offline banner with booking guards.
 - **Mobile Production Parity**: The Expo app now captures email marketing consent in booking and onboarding, supports Maintenance Club subscription checkout and promo codes, submits reviews, exposes marketing preferences, and includes editable admin settings, invoice status actions, customer detail/notes, service pricing edits, and a business analytics screen.
 - **Mobile Native UI Pass**: Added liquid-glass surfaces with blur/solid fallbacks, native tab minimization and tinting, Expo UI switches, press feedback with haptics, and native-feeling modals and forms.
 - **Mobile Release Readiness**: Added the EAS project link and build profiles, a 1024px app icon, branded splash and Android adaptive icons, aligned Expo SDK 57 dependencies, moved `expo-dev-client` to dev dependencies, and added a native CI workflow that typechecks and exports the iOS bundle.

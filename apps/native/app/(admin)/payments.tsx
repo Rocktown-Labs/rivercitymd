@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Alert, Pressable, View } from "react-native";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { router } from "expo-router";
 import * as Haptics from "expo-haptics";
 import {
@@ -9,7 +9,9 @@ import {
   CreditCard,
   DollarSign,
   FileText,
+  RefreshCw,
   Search,
+  Tag,
 } from "lucide-react-native";
 
 import { api } from "@rivercitymd/backend/convex/_generated/api";
@@ -41,7 +43,19 @@ export default function AdminPaymentsScreen() {
     selectedInvoiceId ? { invoiceId: selectedInvoiceId } : "skip",
   );
   const updateStatus = useMutation(api.invoices.updateStatus);
+  const reissueStripeInvoice = useAction(api.payments.reissueStripeInvoice);
+  const applyCouponToInvoice = useAction(api.payments.applyCouponToInvoice);
+  const removeDiscountFromInvoice = useAction(
+    api.payments.removeDiscountFromInvoice,
+  );
   const [isUpdating, setIsUpdating] = React.useState(false);
+  const [isReissuing, setIsReissuing] = React.useState(false);
+  const [isApplyingDiscount, setIsApplyingDiscount] = React.useState(false);
+  const [discountCode, setDiscountCode] = React.useState("");
+  const [discountType, setDiscountType] = React.useState<
+    "percent" | "amount"
+  >("percent");
+  const [discountValue, setDiscountValue] = React.useState("");
 
   const filtered = (invoices || []).filter((inv: any) => {
     if (!searchQuery.trim()) return true;
@@ -84,6 +98,83 @@ export default function AdminPaymentsScreen() {
       ],
     );
   };
+
+  const handleReissueInvoice = async () => {
+    if (!selectedInvoiceId) return;
+    setIsReissuing(true);
+    try {
+      await reissueStripeInvoice({ invoiceId: selectedInvoiceId });
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success,
+      );
+      Alert.alert(
+        "Invoice reissued",
+        "Stripe created a fresh invoice for the remaining balance.",
+      );
+    } catch (error) {
+      Alert.alert(
+        "Could not reissue invoice",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsReissuing(false);
+    }
+  };
+
+  const handleApplyDiscount = async () => {
+    if (!selectedInvoiceId || !discountCode.trim()) {
+      Alert.alert("Coupon required", "Enter a coupon or promo code.");
+      return;
+    }
+    setIsApplyingDiscount(true);
+    try {
+      const value = Number(discountValue);
+      await applyCouponToInvoice({
+        invoiceId: selectedInvoiceId,
+        couponCode: discountCode.trim().toUpperCase(),
+        ...(Number.isFinite(value) && value > 0
+          ? { discountType, discountValue: value }
+          : {}),
+      });
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success,
+      );
+      setDiscountCode("");
+      setDiscountValue("");
+      Alert.alert("Discount applied", "The invoice total has been updated.");
+    } catch (error) {
+      Alert.alert(
+        "Could not apply discount",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsApplyingDiscount(false);
+    }
+  };
+
+  const handleRemoveDiscount = async () => {
+    if (!selectedInvoiceId) return;
+    setIsApplyingDiscount(true);
+    try {
+      await removeDiscountFromInvoice({ invoiceId: selectedInvoiceId });
+      Alert.alert("Discount removed", "The invoice total has been restored.");
+    } catch (error) {
+      Alert.alert(
+        "Could not remove discount",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setIsApplyingDiscount(false);
+    }
+  };
+
+  const canReissue = Boolean(
+    selectedInvoice &&
+      selectedInvoice.paymentOption === "deposit" &&
+      selectedInvoice.depositPaid &&
+      (selectedInvoice.remainingBalance ?? 0) > 0 &&
+      selectedInvoice.status !== "paid",
+  );
 
   return (
     <Screen>
@@ -258,6 +349,114 @@ export default function AdminPaymentsScreen() {
                     .join(", ") || "No vehicles listed"}
                 </Text>
               </View>
+            ) : null}
+
+            {selectedInvoice.couponCode ? (
+              <View className="gap-2 rounded-xl border border-border p-3">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-row items-center gap-2">
+                    <Tag size={14} color={THEME.light.accent} />
+                    <Text className="text-xs font-semibold">
+                      Discount {selectedInvoice.couponCode}
+                    </Text>
+                  </View>
+                  <Text className="text-xs font-bold text-emerald-600">
+                    -${(selectedInvoice.discountAmount ?? 0).toFixed(2)}
+                  </Text>
+                </View>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onPress={handleRemoveDiscount}
+                  disabled={isApplyingDiscount}
+                >
+                  <Text className="text-xs">Remove discount</Text>
+                </Button>
+              </View>
+            ) : (
+              <View className="gap-2 rounded-xl border border-border p-3">
+                <Text className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Apply discount
+                </Text>
+                <Input
+                  value={discountCode}
+                  onChangeText={setDiscountCode}
+                  placeholder="Coupon code"
+                  autoCapitalize="characters"
+                />
+                <View className="flex-row gap-2">
+                  <View className="flex-1">
+                    <Input
+                      value={discountValue}
+                      onChangeText={setDiscountValue}
+                      placeholder="Optional value"
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  <View className="flex-row gap-1">
+                    <Pressable
+                      onPress={() => setDiscountType("percent")}
+                      className={`h-12 w-12 items-center justify-center rounded-xl border ${
+                        discountType === "percent"
+                          ? "border-accent bg-accent/10"
+                          : "border-border bg-card"
+                      }`}
+                    >
+                      <Text
+                        className={`text-sm font-bold ${
+                          discountType === "percent"
+                            ? "text-accent"
+                            : "text-foreground"
+                        }`}
+                      >
+                        %
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => setDiscountType("amount")}
+                      className={`h-12 w-12 items-center justify-center rounded-xl border ${
+                        discountType === "amount"
+                          ? "border-accent bg-accent/10"
+                          : "border-border bg-card"
+                      }`}
+                    >
+                      <Text
+                        className={`text-sm font-bold ${
+                          discountType === "amount"
+                            ? "text-accent"
+                            : "text-foreground"
+                        }`}
+                      >
+                        $
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onPress={handleApplyDiscount}
+                  disabled={isApplyingDiscount}
+                >
+                  <Text className="text-xs">
+                    {isApplyingDiscount ? "Applying..." : "Apply discount"}
+                  </Text>
+                </Button>
+              </View>
+            )}
+
+            {canReissue ? (
+              <Button
+                variant="outline"
+                onPress={handleReissueInvoice}
+                disabled={isReissuing}
+                className="flex-row items-center justify-center gap-2"
+              >
+                <RefreshCw size={15} color={THEME.light.foreground} />
+                <Text className="text-xs font-semibold">
+                  {isReissuing ? "Reissuing..." : "Reissue Stripe Invoice"}
+                </Text>
+              </Button>
             ) : null}
 
             <View className="gap-2">

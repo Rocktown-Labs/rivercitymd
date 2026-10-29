@@ -49,6 +49,13 @@
         }
       ],
       "expo-font",
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow River City MD to attach before and after service photos to appointments."
+        }
+      ],
       "expo-secure-store",
       "expo-web-browser"
     ],

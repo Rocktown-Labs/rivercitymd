@@ -54,6 +54,19 @@ const schema = defineSchema({
     // Payment fields
     stripeCustomerId: v.optional(v.string()),
     notificationPreferences: v.optional(userNotificationPreferencesValidator),
+    pushTokens: v.optional(
+      v.array(
+        v.object({
+          token: v.string(),
+          platform: v.union(
+            v.literal("ios"),
+            v.literal("android"),
+            v.literal("web"),
+          ),
+          updatedAt: v.number(),
+        }),
+      ),
+    ),
   })
     .index("by_email", ["email"])
     .index("by_clerk_user_id", ["clerkUserId"])
@@ -288,6 +301,19 @@ const schema = defineSchema({
     travelDistanceMiles: v.optional(v.number()),
     travelFee: v.optional(v.number()),
     beforePhotos: v.optional(
+      v.array(
+        v.object({
+          vehicleId: v.optional(v.id("vehicles")),
+          vehicleLabel: v.optional(v.string()),
+          key: v.string(),
+          fileName: v.string(),
+          contentType: v.string(),
+          sizeBytes: v.number(),
+          uploadedAt: v.number(),
+        }),
+      ),
+    ),
+    afterPhotos: v.optional(
       v.array(
         v.object({
           vehicleId: v.optional(v.id("vehicles")),
