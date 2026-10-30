@@ -23,6 +23,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Gift Card Card Layout**: Keep the enlarged logo from pushing the price and footer outside the smaller landing-page card by using explicit logo size variants and clearing the image’s intrinsic min-height.
 - **Gift Card Public Access**: Allow the public gift card storefront, claim, success, and tokenized print pages through Clerk so logged-out buyers can purchase and recipients can open claim links; dashboard and admin gift card routes remain protected.
 - **Gift Card Landing Flow**: The landing section now selects preset or custom amounts and the CTA reads “Purchase Gift Card,” carrying the amount into the purchase wizard. Card logos are larger on the 3D, print, and email cards.
 - **Mobile Home Nav**: Remove the Contact item that wrapped below Home and restore the five-item bottom navigation.

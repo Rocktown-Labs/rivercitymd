@@ -89,7 +89,7 @@ export function GiftCardVisual({
           transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y + (flipped ? 180 : 0)}deg)`,
         }}
       >
-        <CardFront amount={amount} status={status} />
+        <CardFront amount={amount} status={status} size={size} />
         <CardBack
           amount={amount}
           balance={displayBalance}
@@ -109,7 +109,15 @@ export function GiftCardVisual({
   );
 }
 
-function CardFront({ amount, status }: { amount: number; status?: string }) {
+function CardFront({
+  amount,
+  status,
+  size,
+}: {
+  amount: number;
+  status?: string;
+  size: "sm" | "md" | "lg";
+}) {
   return (
     <div
       className="absolute inset-0 overflow-hidden rounded-[22px] border border-[#c9a227]/30 bg-[#141210] text-white shadow-[0_30px_80px_-30px_rgba(0,0,0,0.75)] [backface-visibility:hidden]"
@@ -126,7 +134,10 @@ function CardFront({ amount, status }: { amount: number; status?: string }) {
             alt="River City Mobile Detailing"
             width={130}
             height={125}
-            className="h-[30%] w-auto object-contain"
+            className={cn(
+              "min-h-0 w-auto shrink-0 object-contain",
+              size === "sm" ? "h-14" : size === "lg" ? "h-24" : "h-20",
+            )}
             priority
           />
           <div className="text-right">
