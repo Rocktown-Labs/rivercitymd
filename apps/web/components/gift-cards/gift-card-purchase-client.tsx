@@ -32,11 +32,21 @@ export function GiftCardPurchaseClient({
   const createPurchase = useAction(api.giftCards.createPurchase);
   const [showCanceled, setShowCanceled] = React.useState(Boolean(canceled));
 
+  const initialPresetAmount =
+    initialAmount && PRESETS.includes(initialAmount) ? initialAmount : undefined;
+  const initialCustomAmount =
+    initialAmount && !PRESETS.includes(initialAmount)
+      ? String(initialAmount)
+      : "";
   const [forWhom, setForWhom] = React.useState<ForWhom>("other");
   const [delivery, setDelivery] = React.useState<Delivery>("email");
-  const [amount, setAmount] = React.useState(initialAmount ?? 100);
-  const [customMode, setCustomMode] = React.useState(false);
-  const [customAmount, setCustomAmount] = React.useState("");
+  const [amount, setAmount] = React.useState(initialPresetAmount ?? 100);
+  const [customMode, setCustomMode] = React.useState(
+    Boolean(initialAmount && !PRESETS.includes(initialAmount)),
+  );
+  const [customAmount, setCustomAmount] = React.useState(
+    initialCustomAmount,
+  );
   const [purchaserName, setPurchaserName] = React.useState("");
   const [purchaserEmail, setPurchaserEmail] = React.useState("");
   const [recipientName, setRecipientName] = React.useState("");

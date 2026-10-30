@@ -39,7 +39,7 @@ export default async function GiftCardsPage({
             initialAmount={
               Number.isFinite(initialAmount) &&
               initialAmount >= 100 &&
-              initialAmount <= 500 &&
+              initialAmount <= 1000 &&
               initialAmount % 100 === 0
                 ? initialAmount
                 : undefined
