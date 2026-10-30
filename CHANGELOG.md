@@ -23,6 +23,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Subscription Scheduling Parity**: Match the `/book` Step 1 experience in the subscription payment flow — date picker, availability-backed time dropdown, and validated address search with manual fallback — and pre-schedule the next service visit one cycle ahead: each payment confirms the current cycle and plans the following one, and cancelling the subscription cancels future scheduled visits.
 
 ### Fixed
+- **Gift Card Public Access**: Allow the public gift card storefront, claim, success, and tokenized print pages through Clerk so logged-out buyers can purchase and recipients can open claim links; dashboard and admin gift card routes remain protected.
 - **Native SMS Consent Default**: The native booking flow now defaults SMS updates to off instead of pre-checking consent.
 - **Admin Recovery Exclusion**: Exclude admin and team accounts from automatic recovery and win-back audiences, while preserving the owner allowlist for the test recovery email.
 - **Recovery Sweep Customer Exclusions**: Skip expired Maintenance Refresh drafts whose email or name matches an existing customer with appointments, invoices, or subscriptions. The owner's test email is allowlisted so the real email can still be reviewed.
