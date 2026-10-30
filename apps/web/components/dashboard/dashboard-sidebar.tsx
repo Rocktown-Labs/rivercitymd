@@ -14,6 +14,7 @@ import {
   User,
   Star,
   FileText,
+  Gift,
   LogOut,
   RefreshCw,
 } from "lucide-react";
@@ -57,6 +58,11 @@ const menuItems = [
     title: "My Invoices",
     icon: FileText,
     href: "/dashboard/invoices",
+  },
+  {
+    title: "Gift Cards",
+    icon: Gift,
+    href: "/dashboard/gift-cards",
   },
   {
     title: "My Subscription",

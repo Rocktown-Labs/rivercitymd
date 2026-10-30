@@ -17,6 +17,7 @@ import {
   Star,
   FileText,
   FlaskConical,
+  Gift,
   Ticket,
 } from "lucide-react";
 import { SignOutButton } from "@clerk/nextjs";
@@ -89,6 +90,11 @@ const menuItems = [
     title: "Coupons",
     icon: Ticket,
     href: "/admin/coupons",
+  },
+  {
+    title: "Gift Cards",
+    icon: Gift,
+    href: "/admin/gift-cards",
   },
   {
     title: "Reviews",

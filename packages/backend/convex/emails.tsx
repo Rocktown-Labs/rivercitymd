@@ -57,7 +57,11 @@ import {
   SubscriptionAppointmentCreatedEmail,
   AdminSubscriptionCheckoutLinkNotificationEmail,
   AdminPaymentFailedNotificationEmail,
+  GiftCardRecipientEmail,
+  GiftCardReceiptEmail,
+  AdminGiftCardNotificationEmail,
 } from "./emailTemplates";
+import { formatGiftCardCodeForDisplay } from "./lib/giftCards";
 
 // Initialize Resend component
 // testMode defaults to true in the component, which silently drops emails
@@ -1308,6 +1312,143 @@ export const sendAdminPaymentFailedNotification = internalAction({
       from: businessInfo.from,
       to: args.recipientOverride || (await getPrimaryAdminRecipient(ctx)),
       subject: `Payment Failed - ${user?.name || user?.email || "Customer"}`,
+      html,
+    });
+  },
+});
+
+// --- Gift Card Emails ---
+
+export const sendGiftCardRecipientEmail = internalAction({
+  args: {
+    giftCardId: v.id("giftCards"),
+    recipientOverride: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (shouldSkipEmails()) return;
+    const card = await ctx.runQuery(internal.giftCards.getByIdInternal, {
+      giftCardId: args.giftCardId,
+    });
+    if (!card || card.status !== "active") return;
+    const recipient = args.recipientOverride || card.recipientEmail;
+    if (!recipient) return;
+
+    const businessInfo = await getBusinessAndFromName(ctx);
+    if (!businessInfo) return;
+
+    const token = card.claimToken;
+    const claimUrl = token
+      ? `${siteUrl()}/gift-cards/claim?token=${encodeURIComponent(token)}`
+      : `${siteUrl()}/gift-cards/claim?code=${encodeURIComponent(card.code)}`;
+    const printUrl = `${siteUrl()}/gift-cards/print/${encodeURIComponent(card.accessToken)}`;
+
+    const html = await render(
+      GiftCardRecipientEmail({
+        purchaserName: card.purchaserName,
+        recipientName: card.recipientName,
+        amount: card.amount,
+        code: formatGiftCardCodeForDisplay(card.code),
+        message: card.message,
+        claimUrl,
+        printUrl,
+        pinRequired: Boolean(card.pin),
+        businessName: businessInfo.business.name,
+        logoUrl: logoUrl(),
+      }),
+    );
+
+    await sendEmailMessage(ctx, {
+      from: businessInfo.from,
+      to: recipient,
+      subject: `${card.purchaserName} sent you a $${card.amount.toFixed(0)} gift card`,
+      html,
+    });
+  },
+});
+
+export const sendGiftCardReceiptEmail = internalAction({
+  args: {
+    giftCardId: v.id("giftCards"),
+    recipientOverride: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (shouldSkipEmails()) return;
+    const card = await ctx.runQuery(internal.giftCards.getByIdInternal, {
+      giftCardId: args.giftCardId,
+    });
+    if (!card) return;
+    const purchaser = args.recipientOverride || card.purchaserEmail;
+    if (!purchaser) return;
+
+    const businessInfo = await getBusinessAndFromName(ctx);
+    if (!businessInfo) return;
+
+    const printUrl = `${siteUrl()}/gift-cards/print/${encodeURIComponent(card.accessToken)}`;
+    const cardUrl =
+      card.deliveryMethod === "self"
+        ? `${siteUrl()}/dashboard/gift-cards`
+        : card.claimToken
+          ? `${siteUrl()}/gift-cards/claim?token=${encodeURIComponent(card.claimToken)}`
+          : printUrl;
+
+    const html = await render(
+      GiftCardReceiptEmail({
+        purchaserName: card.purchaserName,
+        amount: card.amount,
+        deliveryMethod: card.deliveryMethod,
+        recipientName: card.recipientName,
+        recipientEmail: card.recipientEmail,
+        code: formatGiftCardCodeForDisplay(card.code),
+        cardUrl,
+        printUrl,
+        businessName: businessInfo.business.name,
+        logoUrl: logoUrl(),
+      }),
+    );
+
+    await sendEmailMessage(ctx, {
+      from: businessInfo.from,
+      to: purchaser,
+      subject: `Your $${card.amount.toFixed(0)} ${businessInfo.business.name} gift card`,
+      html,
+    });
+  },
+});
+
+export const sendGiftCardAdminNotification = internalAction({
+  args: {
+    giftCardId: v.id("giftCards"),
+    recipientOverride: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (shouldSkipEmails()) return;
+    const card = await ctx.runQuery(internal.giftCards.getByIdInternal, {
+      giftCardId: args.giftCardId,
+    });
+    if (!card) return;
+
+    const businessInfo = await getBusinessAndFromName(ctx);
+    if (!businessInfo) return;
+
+    const html = await render(
+      AdminGiftCardNotificationEmail({
+        purchaserName: card.purchaserName,
+        purchaserEmail: card.purchaserEmail,
+        recipientName: card.recipientName,
+        recipientEmail: card.recipientEmail,
+        amount: card.amount,
+        paymentMethod: card.paymentMethod,
+        deliveryMethod: card.deliveryMethod,
+        adminUrl: `${siteUrl()}/admin/gift-cards`,
+        businessName: businessInfo.business.name,
+        logoUrl: logoUrl(),
+      }),
+    );
+
+    await sendEmailMessage(ctx, {
+      from: businessInfo.from,
+      to: args.recipientOverride || (await getPrimaryAdminRecipient(ctx)),
+      subject: `Gift card sold - $${card.amount.toFixed(0)}`,
       html,
     });
   },

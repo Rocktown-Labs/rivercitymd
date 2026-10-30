@@ -11,6 +11,7 @@ import {
   Ellipsis,
   FileText,
   FlaskConical,
+  Gift,
   LayoutDashboard,
   MapPinned,
   Settings,
@@ -75,6 +76,11 @@ const navItems = [
     title: "Coupons",
     icon: Ticket,
     href: "/admin/coupons",
+  },
+  {
+    title: "Gift Cards",
+    icon: Gift,
+    href: "/admin/gift-cards",
   },
   {
     title: "Reviews",

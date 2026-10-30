@@ -771,7 +771,12 @@ export const removeDiscount = internalMutation({
       throw new Error("Fully paid invoices cannot be edited");
     }
     const originalTotal = invoice.subtotal + invoice.tax;
-    const newRemainingBalance = Math.max(0, originalTotal - (invoice.depositAmount || 0));
+    const newRemainingBalance = Math.max(
+      0,
+      originalTotal -
+        (invoice.depositAmount || 0) -
+        (invoice.giftCardApplied || 0),
+    );
 
     await ctx.db.patch(args.invoiceId, {
       couponCode: undefined,

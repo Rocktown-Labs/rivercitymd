@@ -47,6 +47,25 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
     period: HOUR,
     capacity: 5,
   },
+  giftCardPurchaseByEmail: {
+    kind: "token bucket",
+    rate: 6,
+    period: HOUR,
+    capacity: 3,
+  },
+  giftCardPurchaseGlobal: {
+    kind: "token bucket",
+    rate: 30,
+    period: HOUR,
+    capacity: 10,
+    shards: 4,
+  },
+  giftCardClaimByUser: {
+    kind: "token bucket",
+    rate: 10,
+    period: HOUR,
+    capacity: 5,
+  },
   outOfAreaLeadByEmail: {
     kind: "token bucket",
     rate: 4,

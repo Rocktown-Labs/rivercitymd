@@ -81,6 +81,7 @@ const schema = defineSchema({
     country: v.string(),
     logoId: v.optional(v.id("_storage")),
     notificationSettings: v.optional(businessNotificationSettingsValidator),
+    giftCardProductId: v.optional(v.string()),
   }),
 
   // Vehicle information
@@ -482,6 +483,11 @@ const schema = defineSchema({
       v.union(v.literal("percent"), v.literal("amount")),
     ),
     couponDiscountValue: v.optional(v.number()),
+    giftCardId: v.optional(v.id("giftCards")),
+    giftCardAppliedAmount: v.optional(v.number()),
+    giftCardReservationId: v.optional(v.id("giftCardRedemptions")),
+    giftCardCouponId: v.optional(v.string()),
+    giftCardCodeLast4: v.optional(v.string()),
     priceSnapshot: v.array(
       v.object({
         itemType: v.optional(
@@ -718,12 +724,143 @@ const schema = defineSchema({
     ),
     couponCode: v.optional(v.string()),
     discountAmount: v.optional(v.number()),
+    giftCardApplied: v.optional(v.number()),
+    giftCardIds: v.optional(v.array(v.id("giftCards"))),
+    giftCardReservationId: v.optional(v.id("giftCardRedemptions")),
   })
     .index("by_user", ["userId"])
     .index("by_appointment", ["appointmentId"])
     .index("by_status", ["status"])
     .index("by_invoice_number", ["invoiceNumber"])
     .index("by_stripe_invoice_id", ["stripeInvoiceId"]),
+
+  // Gift cards and store credit. The balance is the authoritative stored-value
+  // ledger; Stripe is only used for the purchase charge and redemption discounts.
+  giftCards: defineTable({
+    code: v.string(),
+    codeNormalized: v.string(),
+    codeLast4: v.string(),
+    pin: v.optional(v.string()),
+    status: v.union(
+      v.literal("pending_payment"),
+      v.literal("active"),
+      v.literal("depleted"),
+      v.literal("voided"),
+    ),
+    amount: v.number(),
+    balance: v.number(),
+    reservedBalance: v.number(),
+    currency: v.literal("usd"),
+    deliveryMethod: v.union(
+      v.literal("self"),
+      v.literal("email"),
+      v.literal("print"),
+    ),
+    source: v.union(
+      v.literal("purchase"),
+      v.literal("admin_sale"),
+      v.literal("admin_credit"),
+    ),
+    paymentMethod: v.union(
+      v.literal("stripe"),
+      v.literal("cash"),
+      v.literal("comp"),
+    ),
+    purchaserUserId: v.optional(v.id("users")),
+    purchaserName: v.string(),
+    purchaserEmail: v.optional(v.string()),
+    recipientName: v.optional(v.string()),
+    recipientEmail: v.optional(v.string()),
+    message: v.optional(v.string()),
+    stripeCheckoutSessionId: v.optional(v.string()),
+    stripePaymentIntentId: v.optional(v.string()),
+    stripeCustomerId: v.optional(v.string()),
+    claimedByUserId: v.optional(v.id("users")),
+    claimedAt: v.optional(v.number()),
+    claimToken: v.optional(v.string()),
+    claimTokenExpiresAt: v.optional(v.number()),
+    accessToken: v.string(),
+    issuedAt: v.optional(v.number()),
+    deliveryEmailSentAt: v.optional(v.number()),
+    receiptEmailSentAt: v.optional(v.number()),
+    lastSentAt: v.optional(v.number()),
+    voidedAt: v.optional(v.number()),
+    voidReason: v.optional(v.string()),
+    refundedAt: v.optional(v.number()),
+    refundAmount: v.optional(v.number()),
+    createdByUserId: v.optional(v.id("users")),
+    notes: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_code", ["code"])
+    .index("by_code_normalized", ["codeNormalized"])
+    .index("by_access_token", ["accessToken"])
+    .index("by_claim_token", ["claimToken"])
+    .index("by_status", ["status"])
+    .index("by_purchaser_email", ["purchaserEmail"])
+    .index("by_recipient_email", ["recipientEmail"])
+    .index("by_purchaser_user", ["purchaserUserId"])
+    .index("by_claimed_by_user", ["claimedByUserId"])
+    .index("by_stripe_checkout_session", ["stripeCheckoutSessionId"])
+    .index("by_stripe_payment_intent", ["stripePaymentIntentId"]),
+
+  giftCardTransactions: defineTable({
+    giftCardId: v.id("giftCards"),
+    type: v.union(
+      v.literal("issue"),
+      v.literal("reserve"),
+      v.literal("release"),
+      v.literal("redeem"),
+      v.literal("refund"),
+      v.literal("adjust"),
+      v.literal("void"),
+    ),
+    amount: v.number(),
+    balanceBefore: v.number(),
+    balanceAfter: v.number(),
+    orderType: v.optional(
+      v.union(
+        v.literal("booking"),
+        v.literal("invoice"),
+        v.literal("admin"),
+      ),
+    ),
+    orderId: v.optional(v.string()),
+    userId: v.optional(v.id("users")),
+    actorUserId: v.optional(v.id("users")),
+    note: v.optional(v.string()),
+    stripeCouponId: v.optional(v.string()),
+    stripeCheckoutSessionId: v.optional(v.string()),
+    stripePaymentIntentId: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_gift_card", ["giftCardId"])
+    .index("by_user", ["userId"])
+    .index("by_order", ["orderId"])
+    .index("by_stripe_session", ["stripeCheckoutSessionId"]),
+
+  giftCardRedemptions: defineTable({
+    giftCardId: v.id("giftCards"),
+    amount: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("captured"),
+      v.literal("released"),
+    ),
+    orderType: v.union(v.literal("booking"), v.literal("invoice")),
+    orderId: v.string(),
+    stripeCheckoutSessionId: v.optional(v.string()),
+    stripeCouponId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_gift_card", ["giftCardId"])
+    .index("by_order", ["orderId"])
+    .index("by_session", ["stripeCheckoutSessionId"])
+    .index("by_status", ["status"]),
 
   // Recurring Subscriptions
   subscriptions: defineTable({

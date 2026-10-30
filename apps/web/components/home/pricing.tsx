@@ -9,6 +9,7 @@ import { Calendar } from "lucide-react";
 import { motion } from "motion/react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { GiftCardsSection } from "@/components/gift-cards/gift-cards-section";
 
 type LandingPricingService = {
   _id: string;
@@ -401,6 +402,8 @@ export function PricingSection() {
               </div>
             </div>
           )}
+
+          <GiftCardsSection />
 
           {/* Desktop CTA */}
           <motion.div

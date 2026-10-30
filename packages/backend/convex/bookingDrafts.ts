@@ -1293,6 +1293,24 @@ export const setCouponInternal = internalMutation({
   },
 });
 
+export const setGiftCardFieldsInternal = internalMutation({
+  args: {
+    draftId: v.id("bookingDrafts"),
+    giftCardId: v.optional(v.id("giftCards")),
+    giftCardAppliedAmount: v.optional(v.number()),
+    giftCardReservationId: v.optional(v.id("giftCardRedemptions")),
+    giftCardCouponId: v.optional(v.string()),
+    giftCardCodeLast4: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { draftId, ...fields } = args;
+    await ctx.db.patch(draftId, {
+      ...fields,
+      lastActivityAt: Date.now(),
+    });
+  },
+});
+
 export const markCancelledInternal = internalMutation({
   args: {
     draftId: v.id("bookingDrafts"),
@@ -1332,13 +1350,35 @@ export const markExpiredInternal = internalMutation({
       return null;
     }
 
+    const now = Date.now();
+    if (draft.giftCardReservationId) {
+      const reservation = await ctx.db.get(draft.giftCardReservationId);
+      if (reservation && reservation.status === "pending") {
+        const card = await ctx.db.get(reservation.giftCardId);
+        if (card) {
+          await ctx.db.patch(card._id, {
+            reservedBalance: Math.max(
+              0,
+              Math.round((card.reservedBalance - reservation.amount) * 100) / 100,
+            ),
+            updatedAt: now,
+          });
+        }
+        await ctx.db.patch(reservation._id, {
+          status: "released",
+          updatedAt: now,
+        });
+      }
+    }
+
     await cancelHoldJob(ctx, draft);
     await ctx.db.patch(args.draftId, {
       status: "expired",
-      expiredAt: Date.now(),
+      expiredAt: now,
       holdExpiryScheduledId: undefined,
       holdExpiresAt: undefined,
-      lastActivityAt: Date.now(),
+      giftCardReservationId: undefined,
+      lastActivityAt: now,
     });
 
     return null;
@@ -1430,6 +1470,7 @@ export const convertSuccessfulCheckout = internalMutation({
     draftId: v.id("bookingDrafts"),
     stripeCustomerId: v.optional(v.string()),
     paymentIntentId: v.optional(v.string()),
+    giftCardReservationId: v.optional(v.id("giftCardRedemptions")),
   },
   returns: v.union(
     v.null(),
@@ -1449,6 +1490,63 @@ export const convertSuccessfulCheckout = internalMutation({
     const draft = await ctx.db.get(args.draftId);
     if (!draft) {
       return null;
+    }
+
+    const conversionNow = Date.now();
+    const reservationId =
+      args.giftCardReservationId ?? draft.giftCardReservationId;
+    let giftCardApplied = 0;
+    let giftCardId: Id<"giftCards"> | undefined;
+    if (reservationId) {
+      const reservation = await ctx.db.get(reservationId);
+      if (!reservation) {
+        throw new Error("Gift card reservation not found");
+      }
+      if (reservation.status === "released") {
+        throw new Error(
+          "Gift card reservation was released before checkout completed",
+        );
+      }
+      giftCardApplied = reservation.amount;
+      giftCardId = reservation.giftCardId;
+
+      if (reservation.status === "pending") {
+        const card = await ctx.db.get(reservation.giftCardId);
+        if (!card) throw new Error("Gift card not found");
+        if (card.balance < reservation.amount) {
+          throw new Error("Gift card balance is insufficient");
+        }
+        const balanceBefore = card.balance;
+        const balanceAfter =
+          Math.round((card.balance - reservation.amount) * 100) / 100;
+        await ctx.db.patch(card._id, {
+          balance: balanceAfter,
+          reservedBalance: Math.max(
+            0,
+            Math.round((card.reservedBalance - reservation.amount) * 100) / 100,
+          ),
+          status: balanceAfter <= 0 ? "depleted" : "active",
+          updatedAt: conversionNow,
+        });
+        await ctx.db.patch(reservation._id, {
+          status: "captured",
+          updatedAt: conversionNow,
+        });
+        await ctx.db.insert("giftCardTransactions", {
+          giftCardId: card._id,
+          type: "redeem",
+          amount: -reservation.amount,
+          balanceBefore,
+          balanceAfter,
+          orderType: "booking",
+          orderId: String(draft._id),
+          userId: card.claimedByUserId,
+          note: "Gift card redeemed on booking",
+          stripeCouponId: reservation.stripeCouponId,
+          stripeCheckoutSessionId: reservation.stripeCheckoutSessionId,
+          createdAt: conversionNow,
+        });
+      }
     }
 
     if (draft.status === "converted" && draft.convertedAppointmentId && draft.convertedInvoiceId && draft.convertedUserId) {
@@ -1691,6 +1789,9 @@ export const convertSuccessfulCheckout = internalMutation({
         draft.paymentOption === "deposit" ? "send_invoice" : undefined,
       couponCode: discountAmount > 0 ? draft.couponCode : undefined,
       discountAmount: discountAmount > 0 ? discountAmount : undefined,
+      giftCardApplied: giftCardApplied > 0 ? giftCardApplied : undefined,
+      giftCardIds: giftCardId ? [giftCardId] : undefined,
+      giftCardReservationId: reservationId,
     });
 
     let convertedSubscriptionId: Id<"subscriptions"> | undefined;
