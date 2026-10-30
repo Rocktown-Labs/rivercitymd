@@ -24,6 +24,8 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ### Fixed
 - **Gift Card Public Access**: Allow the public gift card storefront, claim, success, and tokenized print pages through Clerk so logged-out buyers can purchase and recipients can open claim links; dashboard and admin gift card routes remain protected.
+- **Gift Card Landing Flow**: The landing section now selects preset or custom amounts and the CTA reads “Purchase Gift Card,” carrying the amount into the purchase wizard. Card logos are larger on the 3D, print, and email cards.
+- **Mobile Home Nav**: Remove the Contact item that wrapped below Home and restore the five-item bottom navigation.
 - **Native SMS Consent Default**: The native booking flow now defaults SMS updates to off instead of pre-checking consent.
 - **Admin Recovery Exclusion**: Exclude admin and team accounts from automatic recovery and win-back audiences, while preserving the owner allowlist for the test recovery email.
 - **Recovery Sweep Customer Exclusions**: Skip expired Maintenance Refresh drafts whose email or name matches an existing customer with appointments, invoices, or subscriptions. The owner's test email is allowlisted so the real email can still be reviewed.

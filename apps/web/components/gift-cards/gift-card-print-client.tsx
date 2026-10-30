@@ -127,9 +127,9 @@ function PrintFront({ amount }: { amount: number }) {
         <Image
           src="/BoldRiverCityMobileDetailingLogo.png"
           alt="River City Mobile Detailing"
-          width={80}
-          height={77}
-          className="h-14 w-auto object-contain"
+          width={130}
+          height={125}
+          className="h-24 w-auto object-contain"
         />
         <p className="text-right text-[8px] uppercase tracking-[0.2em] text-white/40">
           River City
@@ -208,9 +208,9 @@ function PrintBack({
         <Image
           src="/BoldRiverCityMobileDetailingLogo.png"
           alt=""
-          width={44}
-          height={42}
-          className="h-9 w-auto object-contain opacity-70"
+          width={64}
+          height={62}
+          className="h-12 w-auto object-contain opacity-70"
         />
       </div>
     </div>

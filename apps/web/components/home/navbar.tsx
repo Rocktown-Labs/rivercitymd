@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useQuery } from "convex/react";
-import { Home, Wrench, DollarSign, Gift, MessageSquare, Phone } from "lucide-react";
+import { Home, Wrench, DollarSign, Gift, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import { getRoleHomePath } from "@/lib/auth-routing";
@@ -188,17 +188,6 @@ export default function Navbar() {
           >
             <MessageSquare className="w-5 h-5" />
             <span className="text-xs font-medium">Reviews</span>
-          </Link>
-          <Link
-            href="#contact"
-            className={`flex flex-col items-center justify-center gap-1 transition-colors ${
-              activeSection === "contact"
-                ? "text-accent"
-                : "text-muted-foreground"
-            }`}
-          >
-            <Phone className="w-5 h-5" />
-            <span className="text-xs font-medium">Contact</span>
           </Link>
         </div>
       </nav>

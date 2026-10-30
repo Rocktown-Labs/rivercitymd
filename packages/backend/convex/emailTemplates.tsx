@@ -1678,10 +1678,10 @@ function GiftCardFront({
         src={logoUrl || "https://rivercitymd.com/BoldRiverCityMobileDetailingLogo.png"}
         alt="River City Mobile Detailing"
         style={{
-          width: "64px",
-          height: "64px",
+          width: "96px",
+          height: "96px",
           borderRadius: "50%",
-          margin: "0 auto 14px",
+          margin: "0 auto 16px",
           display: "block",
         }}
       />

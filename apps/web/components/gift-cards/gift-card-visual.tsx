@@ -124,9 +124,9 @@ function CardFront({ amount, status }: { amount: number; status?: string }) {
           <Image
             src="/BoldRiverCityMobileDetailingLogo.png"
             alt="River City Mobile Detailing"
-            width={70}
-            height={67}
-            className="h-[18%] w-auto object-contain"
+            width={130}
+            height={125}
+            className="h-[30%] w-auto object-contain"
             priority
           />
           <div className="text-right">
