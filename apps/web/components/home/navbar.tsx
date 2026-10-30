@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useQuery } from "convex/react";
-import { Home, Wrench, DollarSign, MessageSquare, Phone } from "lucide-react";
+import { Home, Wrench, DollarSign, Gift, MessageSquare, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import { getRoleHomePath } from "@/lib/auth-routing";
@@ -79,6 +79,12 @@ export default function Navbar() {
                 className="text-sm font-medium hover:text-accent transition-colors"
               >
                 Pricing
+              </Link>
+              <Link
+                href="/gift-cards"
+                className="text-sm font-medium hover:text-accent transition-colors"
+              >
+                Gift Cards
               </Link>
               <Link
                 href="#testimonials"
@@ -160,6 +166,17 @@ export default function Navbar() {
           >
             <DollarSign className="w-5 h-5" />
             <span className="text-xs font-medium">Pricing</span>
+          </Link>
+          <Link
+            href="/gift-cards"
+            className={`flex flex-col items-center justify-center gap-1 transition-colors ${
+              activeSection === "gift-cards"
+                ? "text-accent"
+                : "text-muted-foreground"
+            }`}
+          >
+            <Gift className="w-5 h-5" />
+            <span className="text-xs font-medium">Gifts</span>
           </Link>
           <Link
             href="#testimonials"

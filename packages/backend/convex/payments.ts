@@ -15,102 +15,17 @@ import { BOOKING_BLOCK_MINUTES } from "./lib/booking";
 import { normalizeStripeCouponCode, validateCouponInput } from "./lib/coupons";
 import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
 import { getEffectiveServicePricingForVehicle } from "./lib/pricing";
+import { delay, getStripeSecretKey, stripeApiCall } from "./lib/stripeApi";
+import {
+  getAvailableGiftCardBalance,
+  normalizeGiftCardCode,
+  roundCurrency,
+} from "./lib/giftCards";
 
 const paymentsInternal: any = (internal as any).payments;
-const STRIPE_API_MAX_ATTEMPTS = 3;
-const STRIPE_API_RETRY_DELAYS_MS = [250, 750] as const;
 const BOOKING_HOLD_DURATION_MS = 15 * 60 * 1000;
 const ABANDONED_RECOVERY_DELAY_MS = 20 * 60 * 1000;
 const ABANDONED_FOLLOW_UP_DELAY_MS = 24 * 60 * 60 * 1000;
-
-// Helper function to get Stripe secret key from environment
-function getStripeSecretKey(): string {
-  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-  if (!stripeSecretKey) {
-    throw new Error(
-      "STRIPE_SECRET_KEY environment variable is not set. Please set it in your Convex environment.",
-    );
-  }
-  return stripeSecretKey;
-}
-
-// Helper function to make Stripe API calls
-async function stripeApiCall(endpoint: string, options: RequestInit = {}) {
-  const stripeSecretKey = getStripeSecretKey();
-  const url = `https://api.stripe.com/v1/${endpoint}`;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= STRIPE_API_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          Authorization: `Bearer ${stripeSecretKey}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-          ...options.headers,
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        let stripeMessage = error;
-        try {
-          const parsed = JSON.parse(error);
-          stripeMessage = parsed?.error?.message || error;
-        } catch {
-          // Keep the raw Stripe body when it is not JSON.
-        }
-        const shouldRetry =
-          response.status === 429 || response.status >= 500;
-        const stripeError = new Error(
-          `Stripe API error: ${response.status} ${stripeMessage}`,
-        );
-
-        if (!shouldRetry || attempt === STRIPE_API_MAX_ATTEMPTS) {
-          throw stripeError;
-        }
-
-        lastError = stripeError;
-      } else {
-        return response.json();
-      }
-    } catch (error) {
-      const stripeError =
-        error instanceof Error ? error : new Error(String(error));
-
-      if (
-        !isTransientStripeConnectionError(stripeError) ||
-        attempt === STRIPE_API_MAX_ATTEMPTS
-      ) {
-        throw stripeError;
-      }
-
-      lastError = stripeError;
-    }
-
-    await delay(STRIPE_API_RETRY_DELAYS_MS[attempt - 1] ?? 1_500);
-  }
-
-  throw lastError ?? new Error("Stripe API request failed");
-}
-
-function isTransientStripeConnectionError(error: Error) {
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("tunnel error") ||
-    message.includes("client error (connect)") ||
-    message.includes("fetch failed") ||
-    message.includes("networkerror") ||
-    message.includes("timeout") ||
-    message.includes("temporar") ||
-    message.includes("econnreset") ||
-    message.includes("enotfound")
-  );
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 const backfillSummaryValidator = v.object({
   scanned: v.number(),
@@ -205,6 +120,8 @@ type BookingCheckoutResult = {
   sessionId: string;
   url: string;
   token: string;
+  status?: "redirect" | "completed";
+  appointmentId?: Id<"appointments">;
 };
 
 type ResumeBookingDraftCheckoutResult = {
@@ -675,6 +592,19 @@ async function createStripeInvoiceAfterDepositImpl(
         amount: `-${depositAmountInCents}`,
         currency: "usd",
         description: `Deposit payment (${invoice.invoiceNumber})`,
+      }),
+    });
+  }
+
+  if (invoice.giftCardApplied && invoice.giftCardApplied > 0) {
+    const giftCardAmountInCents = Math.round(invoice.giftCardApplied * 100);
+    await stripeApiCall("invoiceitems", {
+      method: "POST",
+      body: new URLSearchParams({
+        customer: stripeCustomerId,
+        amount: `-${giftCardAmountInCents}`,
+        currency: "usd",
+        description: `Gift card credit (${invoice.invoiceNumber})`,
       }),
     });
   }
@@ -1912,7 +1842,16 @@ export const applyCouponToInvoice = action({
     }
 
     const newTotal = parseFloat((invoice.subtotal + invoice.tax - discountAmount).toFixed(2));
-    const newRemainingBalance = Math.max(0, parseFloat((newTotal - (invoice.depositAmount || 0)).toFixed(2)));
+    const newRemainingBalance = Math.max(
+      0,
+      parseFloat(
+        (
+          newTotal -
+          (invoice.depositAmount || 0) -
+          (invoice.giftCardApplied || 0)
+        ).toFixed(2),
+      ),
+    );
 
     // 3. If there is an existing Stripe invoice, void/retire it first
     if (invoice.stripeInvoiceId) {
@@ -2005,6 +1944,123 @@ export const removeDiscountFromInvoice = action({
     }
 
     return { success: true };
+  },
+});
+
+export const applyGiftCardToInvoice = action({
+  args: {
+    invoiceId: v.id("invoices"),
+    code: v.string(),
+    pin: v.optional(v.string()),
+  },
+  returns: v.object({
+    success: v.boolean(),
+    appliedAmount: v.number(),
+    newRemainingBalance: v.number(),
+    stripeInvoiceId: v.optional(v.string()),
+    stripeInvoiceUrl: v.optional(v.string()),
+  }),
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    success: boolean;
+    appliedAmount: number;
+    newRemainingBalance: number;
+    stripeInvoiceId?: string;
+    stripeInvoiceUrl?: string;
+  }> => {
+    await requireAdminRole(ctx);
+
+    const invoice: any = await ctx.runQuery(internal.invoices.getByIdInternal, {
+      invoiceId: args.invoiceId,
+    });
+    if (!invoice) throw new Error("Invoice not found");
+    if (invoice.status === "paid" && (invoice.remainingBalance ?? 0) <= 0) {
+      throw new Error("Fully paid invoices cannot be modified");
+    }
+    if (
+      (invoice.paymentOption ?? "deposit") === "deposit" &&
+      !invoice.depositPaid
+    ) {
+      throw new Error(
+        "The deposit must be paid before applying a gift card to the remaining balance.",
+      );
+    }
+
+    const amountDue = invoice.remainingBalance ?? invoice.total;
+    if (amountDue <= 0) {
+      throw new Error("This invoice has no remaining balance");
+    }
+
+    const validation = await ctx.runAction(
+      internal.giftCards.validateForAdmin,
+      {
+        code: args.code,
+        pin: args.pin,
+      },
+    );
+    const appliedAmount = Math.min(validation.availableBalance, amountDue);
+    if (appliedAmount <= 0) {
+      throw new Error("This gift card has no available balance");
+    }
+
+    const reservationId = await ctx.runMutation(
+      internal.giftCards.reserveForOrder,
+      {
+        giftCardId: validation.giftCardId,
+        amount: appliedAmount,
+        orderType: "invoice",
+        orderId: String(args.invoiceId),
+        expiresAt: Date.now() + 60_000,
+      },
+    );
+    const updated = await ctx.runMutation(
+      internal.giftCards.captureReservationToInvoice,
+      {
+        reservationId,
+        invoiceId: args.invoiceId,
+        note: `Applied to invoice ${invoice.invoiceNumber}`,
+      },
+    );
+
+    if (invoice.stripeInvoiceId) {
+      try {
+        await retireStripeInvoice(invoice.stripeInvoiceId);
+      } catch (error) {
+        console.warn(
+          `[payments] Failed to retire Stripe invoice ${invoice.stripeInvoiceId} after gift card`,
+          error,
+        );
+      }
+    }
+
+    let stripeInvoiceId: string | undefined;
+    let stripeInvoiceUrl: string | undefined;
+    if (updated.remainingBalance > 0) {
+      try {
+        const stripeInvoice = await createStripeInvoiceAfterDepositImpl(ctx, {
+          invoiceId: args.invoiceId,
+          appointmentId: invoice.appointmentId,
+          forceRecreate: true,
+        });
+        stripeInvoiceId = stripeInvoice.stripeInvoiceId;
+        stripeInvoiceUrl = stripeInvoice.stripeInvoiceUrl;
+      } catch (error) {
+        console.error(
+          `[payments] Failed to recreate Stripe invoice after gift card for ${args.invoiceId}`,
+          error,
+        );
+      }
+    }
+
+    return {
+      success: true,
+      appliedAmount,
+      newRemainingBalance: updated.remainingBalance,
+      stripeInvoiceId,
+      stripeInvoiceUrl,
+    };
   },
 });
 
@@ -2710,22 +2766,285 @@ async function ensureStripeCustomerForBookingDraft(
   return { stripeCustomerId: customer.id as string, userId: undefined };
 }
 
+async function createGiftCardCoupon(args: {
+  amount: number;
+  giftCardId: Id<"giftCards">;
+  reservationId: Id<"giftCardRedemptions">;
+  name?: string;
+  extraMetadata?: Record<string, string>;
+}): Promise<string> {
+  const amount = roundCurrency(args.amount);
+  if (amount <= 0) {
+    throw new Error("Gift card coupon amount must be positive");
+  }
+  const body = new URLSearchParams({
+    amount_off: String(Math.round(amount * 100)),
+    currency: "usd",
+    duration: "once",
+    name: (args.name ?? "Gift card").slice(0, 40),
+    max_redemptions: "1",
+    "metadata[type]": "gift_card",
+    "metadata[giftCardId]": String(args.giftCardId),
+    "metadata[reservationId]": String(args.reservationId),
+  });
+  for (const [key, value] of Object.entries(args.extraMetadata ?? {})) {
+    body.append(`metadata[${key}]`, value);
+  }
+  const coupon = await stripeApiCall("coupons", {
+    method: "POST",
+    body,
+  });
+  return coupon.id;
+}
+
+async function releaseDraftGiftCardReservation(
+  ctx: any,
+  draft: Doc<"bookingDrafts">,
+  reason: string,
+): Promise<void> {
+  if (!draft.giftCardReservationId) return;
+  await ctx.runMutation(internal.giftCards.releaseReservation, {
+    reservationId: draft.giftCardReservationId,
+    reason,
+  });
+}
+
+async function prepareGiftCardForDraft(
+  ctx: any,
+  draft: Doc<"bookingDrafts">,
+  giftCardCodeInput: string | undefined,
+  giftCardPin: string | undefined,
+  amountDueToday: number,
+  resolvedCoupon: ResolvedStripeCoupon | null,
+): Promise<{
+  giftCardId: Id<"giftCards">;
+  appliedAmount: number;
+  reservationId: Id<"giftCardRedemptions">;
+  couponId: string;
+} | null> {
+  const codeWasProvided = giftCardCodeInput !== undefined;
+  if (codeWasProvided && !giftCardCodeInput?.trim()) {
+    await releaseDraftGiftCardReservation(
+      ctx,
+      draft,
+      "Gift card removed from booking",
+    );
+    await ctx.runMutation(internal.bookingDrafts.setGiftCardFieldsInternal, {
+      draftId: draft._id,
+      giftCardId: undefined,
+      giftCardAppliedAmount: undefined,
+      giftCardReservationId: undefined,
+      giftCardCouponId: undefined,
+      giftCardCodeLast4: undefined,
+    });
+    return null;
+  }
+
+  if (
+    !codeWasProvided &&
+    draft.giftCardReservationId &&
+    draft.giftCardId &&
+    draft.giftCardAppliedAmount &&
+    draft.giftCardCouponId
+  ) {
+    const reservation = await ctx.runQuery(
+      internal.giftCards.getReservationInternal,
+      { reservationId: draft.giftCardReservationId },
+    );
+    if (
+      reservation &&
+      reservation.status === "pending" &&
+      reservation.expiresAt > Date.now()
+    ) {
+      const card = await ctx.runQuery(internal.giftCards.getByIdInternal, {
+        giftCardId: draft.giftCardId,
+      });
+      if (card) {
+        return {
+          giftCardId: card._id,
+          appliedAmount: draft.giftCardAppliedAmount,
+          reservationId: draft.giftCardReservationId,
+          couponId: draft.giftCardCouponId,
+        };
+      }
+    }
+    await releaseDraftGiftCardReservation(
+      ctx,
+      draft,
+      "Gift card reservation expired",
+    );
+    await ctx.runMutation(internal.bookingDrafts.setGiftCardFieldsInternal, {
+      draftId: draft._id,
+      giftCardId: undefined,
+      giftCardAppliedAmount: undefined,
+      giftCardReservationId: undefined,
+      giftCardCouponId: undefined,
+      giftCardCodeLast4: undefined,
+    });
+    if (!codeWasProvided) return null;
+  }
+
+  if (!codeWasProvided) return null;
+
+  const validation = await ctx.runAction(api.giftCards.validateForBooking, {
+    code: giftCardCodeInput!,
+    pin: giftCardPin,
+    orderAmount: amountDueToday,
+  });
+  const card: Doc<"giftCards"> | null = await ctx.runQuery(
+    internal.giftCards.getByIdInternal,
+    { giftCardId: validation.giftCardId },
+  );
+  if (!card) throw new Error("Gift card not found");
+
+  const appliedAmount = roundCurrency(
+    Math.min(getAvailableGiftCardBalance(card), amountDueToday),
+  );
+  if (appliedAmount <= 0) {
+    throw new ConvexError({
+      message: "This gift card has no available balance for this payment.",
+    });
+  }
+
+  await releaseDraftGiftCardReservation(
+    ctx,
+    draft,
+    "Replaced by a new gift card",
+  );
+  const reservationId = await ctx.runMutation(
+    internal.giftCards.reserveForOrder,
+    {
+      giftCardId: card._id,
+      amount: appliedAmount,
+      orderType: "booking",
+      orderId: String(draft._id),
+      expiresAt: Date.now() + BOOKING_HOLD_DURATION_MS,
+    },
+  );
+
+  try {
+    const promoDiscount =
+      draft.paymentOption === "full" && resolvedCoupon
+        ? computeCouponDiscountAmount(
+            draft.totalPrice,
+            resolvedCoupon.discountType,
+            resolvedCoupon.discountValue,
+          )
+        : 0;
+    const couponAmount =
+      draft.paymentOption === "full"
+        ? Math.min(draft.totalPrice, promoDiscount + appliedAmount)
+        : appliedAmount;
+    const couponId = await createGiftCardCoupon({
+      amount: couponAmount,
+      giftCardId: card._id,
+      reservationId,
+      name:
+        draft.paymentOption === "full" && promoDiscount > 0
+          ? "Promo + gift card"
+          : "Gift card",
+      extraMetadata: {
+        promoDiscount: String(promoDiscount),
+        giftCardApplied: String(appliedAmount),
+      },
+    });
+
+    await ctx.runMutation(internal.giftCards.attachCouponToReservation, {
+      reservationId,
+      stripeCouponId: couponId,
+    });
+    await ctx.runMutation(internal.bookingDrafts.setGiftCardFieldsInternal, {
+      draftId: draft._id,
+      giftCardId: card._id,
+      giftCardAppliedAmount: appliedAmount,
+      giftCardReservationId: reservationId,
+      giftCardCouponId: couponId,
+      giftCardCodeLast4: card.codeLast4,
+    });
+
+    return {
+      giftCardId: card._id,
+      appliedAmount,
+      reservationId,
+      couponId,
+    };
+  } catch (error) {
+    await ctx.runMutation(internal.giftCards.releaseReservation, {
+      reservationId,
+      reason: "Could not create gift card discount",
+    });
+    throw error;
+  }
+}
+
+async function finalizeGiftCardBooking(
+  ctx: any,
+  converted: {
+    appointmentId: Id<"appointments">;
+    invoiceId: Id<"invoices">;
+    userId: Id<"users">;
+    isFullPayment: boolean;
+    total: number;
+  },
+): Promise<void> {
+  await ctx.scheduler.runAfter(
+    0,
+    internal.notifications.queueBookingReceived,
+    {
+      appointmentId: converted.appointmentId,
+      invoiceId: converted.invoiceId,
+      transition: "gift_card_checkout",
+    },
+  );
+
+  if (converted.isFullPayment) {
+    const user = await ctx.runQuery(internal.users.getByIdInternal, {
+      userId: converted.userId,
+    });
+    if (user) {
+      await ctx.runMutation(internal.users.updateStats, {
+        userId: converted.userId,
+        timesServiced: (user.timesServiced || 0) + 1,
+        totalSpent: (user.totalSpent || 0) + converted.total,
+      });
+    }
+  } else {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.emails.sendAdminDepositPaidNotification,
+      {
+        appointmentId: converted.appointmentId,
+        invoiceId: converted.invoiceId,
+      },
+    );
+  }
+}
+
 async function createCheckoutSessionForDraft(
   ctx: any,
   draft: Doc<"bookingDrafts">,
   origin: string,
   couponCodeInput?: string,
+  giftCardCodeInput?: string,
+  giftCardPin?: string,
 ): Promise<BookingCheckoutResult> {
   if (draft.status === "converted") {
     throw new Error("This booking has already been completed.");
   }
 
   const now = Date.now();
+  const requestedGiftCardLast4 = giftCardCodeInput
+    ? normalizeGiftCardCode(giftCardCodeInput).slice(-4)
+    : undefined;
+  const giftCardChanged =
+    giftCardCodeInput !== undefined &&
+    requestedGiftCardLast4 !== draft.giftCardCodeLast4;
   if (
     draft.status === "checkout_open" &&
     draft.holdExpiresAt &&
     draft.holdExpiresAt > now &&
-    draft.stripeCheckoutUrl
+    draft.stripeCheckoutUrl &&
+    !giftCardChanged
   ) {
     return {
       sessionId: draft.stripeCheckoutSessionId ?? "",
@@ -2781,7 +3100,70 @@ async function createCheckoutSessionForDraft(
     });
   }
 
-  const { stripeCustomerId } = await ensureStripeCustomerForBookingDraft(ctx, draft);
+  const promoDiscountAmount = resolvedCoupon
+    ? computeCouponDiscountAmount(
+        draft.totalPrice,
+        resolvedCoupon.discountType,
+        resolvedCoupon.discountValue,
+      )
+    : 0;
+  const discountedTotal = roundCurrency(
+    draft.totalPrice - promoDiscountAmount,
+  );
+  const amountDueToday =
+    draft.paymentOption === "full"
+      ? discountedTotal
+      : Math.min(draft.depositAmount, discountedTotal);
+
+  const giftCard = await prepareGiftCardForDraft(
+    ctx,
+    draft,
+    giftCardCodeInput,
+    giftCardPin,
+    amountDueToday,
+    resolvedCoupon,
+  );
+
+  if (
+    (giftCard && giftCard.appliedAmount >= amountDueToday) ||
+    (!giftCard && amountDueToday <= 0)
+  ) {
+    const converted = await ctx.runMutation(
+      internal.bookingDrafts.convertSuccessfulCheckout,
+      {
+        draftId: draft._id,
+        giftCardReservationId: giftCard?.reservationId,
+      },
+    );
+    if (!converted) {
+      throw new Error("Could not complete this booking");
+    }
+    await finalizeGiftCardBooking(ctx, converted);
+    return {
+      sessionId: "",
+      url: "",
+      token: draft.resumeToken,
+      status: "completed",
+      appointmentId: converted.appointmentId,
+    };
+  }
+
+  let stripeCustomerId: string;
+  try {
+    ({ stripeCustomerId } = await ensureStripeCustomerForBookingDraft(
+      ctx,
+      draft,
+    ));
+  } catch (error) {
+    if (giftCard) {
+      await releaseDraftGiftCardReservation(
+        ctx,
+        draft,
+        "Could not create Stripe customer",
+      );
+    }
+    throw error;
+  }
   const successUrl = buildBookingRedirectUrl(
     origin,
     "/booking/success",
@@ -2813,11 +3195,13 @@ async function createCheckoutSessionForDraft(
   const expectedDepositFromPrice = depositPerVehicle * vehicleCount;
   const canUseDepositPriceId =
     depositPriceId &&
+    !giftCard?.couponId &&
     Math.round(draft.depositAmount * 100) ===
       Math.round(expectedDepositFromPrice * 100);
   let sessionId = "";
   let url = "";
 
+  try {
   if (draft.paymentOption === "full") {
     const totalAmountInCents = Math.round(draft.totalPrice * 100);
     const sessionData = new URLSearchParams({
@@ -2870,8 +3254,9 @@ async function createCheckoutSessionForDraft(
       );
     }
     sessionData.append("line_items[0][quantity]", "1");
-    if (resolvedCoupon) {
-      sessionData.append("discounts[0][coupon]", resolvedCoupon.couponId);
+    const couponIdToApply = giftCard?.couponId ?? resolvedCoupon?.couponId;
+    if (couponIdToApply) {
+      sessionData.append("discounts[0][coupon]", couponIdToApply);
     }
 
     const session = await stripeApiCall("checkout/sessions", {
@@ -2899,7 +3284,7 @@ async function createCheckoutSessionForDraft(
         "Stripe checkout with depositPriceId failed, falling back to dynamic price_data:",
         stripeErr,
       );
-      const depositAmountInCents = Math.round(draft.depositAmount * 100);
+      const depositAmountInCents = Math.round(amountDueToday * 100);
       const sessionData = new URLSearchParams({
         mode: "payment",
         customer: stripeCustomerId,
@@ -2926,6 +3311,9 @@ async function createCheckoutSessionForDraft(
         `Deposit (${vehicleCount} vehicle${vehicleCount > 1 ? "s" : ""})`,
       );
       sessionData.append("line_items[0][quantity]", "1");
+      if (giftCard?.couponId) {
+        sessionData.append("discounts[0][coupon]", giftCard.couponId);
+      }
 
       const session = await stripeApiCall("checkout/sessions", {
         method: "POST",
@@ -2935,7 +3323,7 @@ async function createCheckoutSessionForDraft(
       url = session.url;
     }
   } else {
-    const depositAmountInCents = Math.round(draft.depositAmount * 100);
+    const depositAmountInCents = Math.round(amountDueToday * 100);
     const sessionData = new URLSearchParams({
       mode: "payment",
       customer: stripeCustomerId,
@@ -2962,6 +3350,9 @@ async function createCheckoutSessionForDraft(
       `Deposit (${vehicleCount} vehicle${vehicleCount > 1 ? "s" : ""})`,
     );
     sessionData.append("line_items[0][quantity]", "1");
+    if (giftCard?.couponId) {
+      sessionData.append("discounts[0][coupon]", giftCard.couponId);
+    }
 
     const session = await stripeApiCall("checkout/sessions", {
       method: "POST",
@@ -2970,9 +3361,33 @@ async function createCheckoutSessionForDraft(
     sessionId = session.id;
     url = session.url;
   }
+  } catch (error) {
+    if (giftCard) {
+      await releaseDraftGiftCardReservation(
+        ctx,
+        draft,
+        "Checkout session creation failed",
+      );
+    }
+    throw error;
+  }
 
   if (!sessionId || !url) {
+    if (giftCard) {
+      await releaseDraftGiftCardReservation(
+        ctx,
+        draft,
+        "Checkout session creation failed",
+      );
+    }
     throw new Error("Failed to create checkout session");
+  }
+
+  if (giftCard) {
+    await ctx.runMutation(internal.giftCards.attachSessionToReservation, {
+      reservationId: giftCard.reservationId,
+      stripeCheckoutSessionId: sessionId,
+    });
   }
 
   const holdExpiryScheduledId = await ctx.scheduler.runAfter(
@@ -3022,11 +3437,15 @@ export const createBookingCheckout = action({
     draftId: v.id("bookingDrafts"),
     origin: v.string(),
     couponCode: v.optional(v.string()),
+    giftCardCode: v.optional(v.string()),
+    giftCardPin: v.optional(v.string()),
   },
   returns: v.object({
     sessionId: v.string(),
     url: v.string(),
     token: v.string(),
+    status: v.optional(v.union(v.literal("redirect"), v.literal("completed"))),
+    appointmentId: v.optional(v.id("appointments")),
   }),
   handler: async (ctx, args): Promise<BookingCheckoutResult> => {
     await assertRateLimit(ctx, "bookingCheckoutByDraft", {
@@ -3054,6 +3473,8 @@ export const createBookingCheckout = action({
       draft,
       args.origin,
       args.couponCode,
+      args.giftCardCode,
+      args.giftCardPin,
     );
   },
 });
@@ -3214,6 +3635,16 @@ export const resumeBookingDraftCheckout = action({
     }
 
     const checkout = await createCheckoutSessionForDraft(ctx, draft, args.origin);
+    if (checkout.status === "completed") {
+      return {
+        status: "converted",
+        url: buildBookingRedirectUrl(
+          args.origin,
+          "/booking/success",
+          draft.resumeToken,
+        ),
+      };
+    }
     return {
       status: "redirect",
       url: checkout.url,
@@ -3250,6 +3681,11 @@ export const cancelBookingDraftCheckout = action({
     }
 
     await expireStripeCheckoutSessionIfPossible(draft.stripeCheckoutSessionId);
+    await releaseDraftGiftCardReservation(
+      ctx,
+      draft,
+      "Booking checkout cancelled",
+    );
     await ctx.runMutation(internal.bookingDrafts.markCancelledInternal, {
       draftId: draft._id,
     });

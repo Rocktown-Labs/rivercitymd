@@ -1651,3 +1651,295 @@ export function AdminPaymentFailedNotificationEmail({
     </EmailLayout>
   );
 }
+
+// --- Gift Card Emails ---
+
+const giftCardGold = "#c9a227";
+
+function GiftCardFront({
+  amount,
+  logoUrl,
+}: {
+  amount: number;
+  logoUrl?: string;
+}) {
+  return (
+    <Section
+      style={{
+        backgroundColor: brand.charcoal,
+        borderRadius: "16px",
+        padding: "28px 24px",
+        textAlign: "center",
+        marginBottom: "24px",
+        border: `1px solid ${giftCardGold}55`,
+      }}
+    >
+      <Img
+        src={logoUrl || "https://rivercitymd.com/BoldRiverCityMobileDetailingLogo.png"}
+        alt="River City Mobile Detailing"
+        style={{
+          width: "64px",
+          height: "64px",
+          borderRadius: "50%",
+          margin: "0 auto 14px",
+          display: "block",
+        }}
+      />
+      <Text
+        style={{
+          color: giftCardGold,
+          fontSize: "13px",
+          letterSpacing: "4px",
+          fontWeight: 700,
+          margin: "0 0 8px",
+        }}
+      >
+        GIFT CARD
+      </Text>
+      <Text
+        style={{
+          color: brand.white,
+          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontSize: "42px",
+          lineHeight: "1.1",
+          margin: "0 0 6px",
+        }}
+      >
+        ${amount.toFixed(0)}
+      </Text>
+      <Text
+        style={{
+          color: brand.textMuted,
+          fontSize: "10px",
+          letterSpacing: "2px",
+          textTransform: "uppercase",
+          margin: 0,
+        }}
+      >
+        River City Mobile Detailing
+      </Text>
+    </Section>
+  );
+}
+
+export function GiftCardRecipientEmail({
+  purchaserName,
+  recipientName,
+  amount,
+  code,
+  message,
+  claimUrl,
+  printUrl,
+  pinRequired,
+  businessName,
+  logoUrl,
+}: {
+  purchaserName: string;
+  recipientName?: string;
+  amount: number;
+  code: string;
+  message?: string;
+  claimUrl: string;
+  printUrl: string;
+  pinRequired?: boolean;
+  businessName: string;
+  logoUrl?: string;
+}) {
+  const greeting = recipientName ? `Hi ${recipientName},` : "Hi there,";
+  return (
+    <EmailLayout
+      preview={`${purchaserName} sent you a $${amount.toFixed(0)} gift card`}
+      logoUrl={logoUrl}
+      businessName={businessName}
+    >
+      <Heading style={emailStyles.heading}>
+        {purchaserName} sent you a gift card
+      </Heading>
+      <Text style={emailStyles.textBody}>{greeting}</Text>
+      <Text style={emailStyles.textBody}>
+        {purchaserName} sent you a ${amount.toFixed(0)} gift card for{" "}
+        {businessName}. Use it on any service or outstanding invoice.
+      </Text>
+
+      <GiftCardFront amount={amount} logoUrl={logoUrl} />
+
+      {message ? (
+        <Section
+          style={{
+            ...emailStyles.detailBox,
+            borderLeftColor: giftCardGold,
+          }}
+        >
+          <Text style={{ ...emailStyles.text, fontStyle: "italic", margin: 0 }}>
+            &ldquo;{message}&rdquo;
+          </Text>
+        </Section>
+      ) : null}
+
+      <Section style={{ textAlign: "center", marginBottom: "16px" }}>
+        <Button href={claimUrl} style={emailStyles.primaryButton}>
+          Open Your Gift
+        </Button>
+      </Section>
+
+      <Section style={emailStyles.detailBox}>
+        <DetailField label="Gift card code" value={code} />
+        <DetailField label="Balance" value={`$${amount.toFixed(2)}`} />
+        <DetailField label="Expires" value="Never" />
+      </Section>
+
+      {pinRequired ? (
+        <Text style={{ ...emailStyles.text, fontSize: "13px" }}>
+          This card also has a 4-digit PIN. Ask {purchaserName} for it when you
+          redeem the card.
+        </Text>
+      ) : null}
+
+      <Text style={{ ...emailStyles.text, fontSize: "13px" }}>
+        Prefer a printed card?{" "}
+        <Link href={printUrl} style={{ color: brand.teal }}>
+          Open the print-ready version
+        </Link>
+        .
+      </Text>
+
+      <Hr style={emailStyles.hr} />
+      <Text style={{ ...emailStyles.text, fontSize: "12px" }}>
+        Keep this email private. Anyone with the code can use the remaining
+        balance. Gift cards never expire and have no cash value.
+      </Text>
+    </EmailLayout>
+  );
+}
+
+export function GiftCardReceiptEmail({
+  purchaserName,
+  amount,
+  deliveryMethod,
+  recipientName,
+  recipientEmail,
+  code,
+  cardUrl,
+  printUrl,
+  businessName,
+  logoUrl,
+}: {
+  purchaserName: string;
+  amount: number;
+  deliveryMethod: "self" | "email" | "print";
+  recipientName?: string;
+  recipientEmail?: string;
+  code: string;
+  cardUrl: string;
+  printUrl: string;
+  businessName: string;
+  logoUrl?: string;
+}) {
+  const deliveryCopy =
+    deliveryMethod === "email"
+      ? `We emailed the gift card to ${recipientEmail || recipientName || "the recipient"}.`
+      : deliveryMethod === "print"
+        ? `Print the card below and hand it to ${recipientName || "the recipient"}.`
+        : "The gift card is stored in your account, ready to use or print.";
+
+  return (
+    <EmailLayout
+      preview={`Your $${amount.toFixed(0)} ${businessName} gift card`}
+      logoUrl={logoUrl}
+      businessName={businessName}
+    >
+      <Heading style={emailStyles.heading}>Your gift card is ready</Heading>
+      <Text style={emailStyles.textBody}>
+        Thanks, {purchaserName}. {deliveryCopy}
+      </Text>
+
+      <GiftCardFront amount={amount} logoUrl={logoUrl} />
+
+      <Section style={emailStyles.detailBox}>
+        <DetailField label="Amount" value={`$${amount.toFixed(2)}`} />
+        <DetailField
+          label="Delivery"
+          value={
+            deliveryMethod === "email"
+              ? "Email"
+              : deliveryMethod === "print"
+                ? "Print at home"
+                : "My account"
+          }
+        />
+        {recipientName ? (
+          <DetailField label="Recipient" value={recipientName} />
+        ) : null}
+        <DetailField label="Code" value={code} />
+        <DetailField label="Expires" value="Never" />
+      </Section>
+
+      <Section style={{ textAlign: "center", marginBottom: "16px" }}>
+        <Button href={printUrl} style={emailStyles.primaryButton}>
+          View &amp; Print Card
+        </Button>
+      </Section>
+
+      <Text style={{ ...emailStyles.text, fontSize: "13px" }}>
+        You can also view this card anytime at{" "}
+        <Link href={cardUrl} style={{ color: brand.teal }}>
+          your gift card page
+        </Link>
+        .
+      </Text>
+    </EmailLayout>
+  );
+}
+
+export function AdminGiftCardNotificationEmail({
+  purchaserName,
+  purchaserEmail,
+  recipientName,
+  recipientEmail,
+  amount,
+  paymentMethod,
+  deliveryMethod,
+  adminUrl,
+  businessName,
+  logoUrl,
+}: {
+  purchaserName: string;
+  purchaserEmail?: string;
+  recipientName?: string;
+  recipientEmail?: string;
+  amount: number;
+  paymentMethod: string;
+  deliveryMethod: string;
+  adminUrl: string;
+  businessName: string;
+  logoUrl?: string;
+}) {
+  return (
+    <EmailLayout
+      preview={`Gift card sold — $${amount.toFixed(0)}`}
+      logoUrl={logoUrl}
+      businessName={businessName}
+    >
+      <Heading style={emailStyles.heading}>Gift card sold</Heading>
+      <Text style={emailStyles.textBody}>
+        A new gift card has been issued. Review the details below.
+      </Text>
+
+      <Section style={{ ...emailStyles.detailBox, borderLeftColor: giftCardGold }}>
+        <DetailField label="Amount" value={`$${amount.toFixed(2)}`} />
+        <DetailField label="Purchaser" value={purchaserName} />
+        {purchaserEmail ? <DetailField label="Purchaser email" value={purchaserEmail} /> : null}
+        {recipientName ? <DetailField label="Recipient" value={recipientName} /> : null}
+        {recipientEmail ? <DetailField label="Recipient email" value={recipientEmail} /> : null}
+        <DetailField label="Payment" value={paymentMethod} />
+        <DetailField label="Delivery" value={deliveryMethod} />
+      </Section>
+
+      <Section style={{ textAlign: "center", marginBottom: "8px" }}>
+        <Button href={adminUrl} style={emailStyles.primaryButton}>
+          Open Gift Cards
+        </Button>
+      </Section>
+    </EmailLayout>
+  );
+}

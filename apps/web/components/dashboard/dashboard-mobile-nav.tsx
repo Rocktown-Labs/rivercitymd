@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Calendar, Car, User, Star } from "lucide-react";
+import { LayoutDashboard, Calendar, Car, User, Star, Gift } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -20,6 +20,11 @@ const navItems = [
     title: "Vehicles",
     icon: Car,
     href: "/dashboard/vehicles",
+  },
+  {
+    title: "Gift Cards",
+    icon: Gift,
+    href: "/dashboard/gift-cards",
   },
   {
     title: "Reviews",

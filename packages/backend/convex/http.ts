@@ -199,6 +199,18 @@ registerRoutes(http, components.stripe, {
       event: Stripe.CheckoutSessionAsyncPaymentSucceededEvent,
     ) => {
       const session = event.data.object;
+      if (session.metadata?.type === "gift_card") {
+        await ctx.runMutation(internal.giftCards.activateFromCheckout, {
+          stripeCheckoutSessionId: session.id,
+          stripePaymentIntentId:
+            typeof session.payment_intent === "string"
+              ? session.payment_intent
+              : undefined,
+          stripeCustomerId:
+            typeof session.customer === "string" ? session.customer : undefined,
+        });
+        return;
+      }
       if (session.mode === "subscription" && session.metadata?.subscriptionId) {
         const subscriptionId = session.metadata.subscriptionId as Id<"subscriptions">;
         const stripeSubscriptionId = session.subscription as string;
@@ -218,6 +230,26 @@ registerRoutes(http, components.stripe, {
       event: Stripe.CheckoutSessionCompletedEvent,
     ) => {
       const session = event.data.object;
+
+      // --- Handle gift card purchase checkout ---
+      if (session.metadata?.type === "gift_card") {
+        if (
+          session.payment_status !== "paid" &&
+          session.payment_status !== "no_payment_required"
+        ) {
+          return;
+        }
+        await ctx.runMutation(internal.giftCards.activateFromCheckout, {
+          stripeCheckoutSessionId: session.id,
+          stripePaymentIntentId:
+            typeof session.payment_intent === "string"
+              ? session.payment_intent
+              : undefined,
+          stripeCustomerId:
+            typeof session.customer === "string" ? session.customer : undefined,
+        });
+        return;
+      }
 
       // --- Handle subscription checkout ---
       if (session.mode === "setup" && session.metadata?.subscriptionId) {
@@ -469,6 +501,12 @@ registerRoutes(http, components.stripe, {
       event: Stripe.CheckoutSessionExpiredEvent,
     ) => {
       const session = event.data.object;
+      if (session.metadata?.type === "gift_card") {
+        await ctx.runMutation(internal.giftCards.markCheckoutExpired, {
+          stripeCheckoutSessionId: session.id,
+        });
+        return;
+      }
       const bookingDraftId = session.metadata?.draftId;
       if (!bookingDraftId) {
         return;
@@ -809,6 +847,19 @@ registerRoutes(http, components.stripe, {
           status: "overdue",
         });
       }
+    },
+
+    "charge.refunded": async (ctx, event: Stripe.ChargeRefundedEvent) => {
+      const charge = event.data.object;
+      const paymentIntentId =
+        typeof charge.payment_intent === "string"
+          ? charge.payment_intent
+          : undefined;
+      if (!paymentIntentId) return;
+      await ctx.runMutation(internal.giftCards.handlePurchaseRefund, {
+        stripePaymentIntentId: paymentIntentId,
+        refundAmount: charge.amount_refunded / 100,
+      });
     },
   },
 });

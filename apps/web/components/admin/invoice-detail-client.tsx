@@ -38,6 +38,7 @@ import {
   ExternalLink,
   Calendar,
   FileText,
+  Gift,
   RefreshCw,
   Tag,
 } from "lucide-react";
@@ -661,6 +662,19 @@ export default function InvoiceDetailClient({ invoiceId }: Props) {
                   <TableCell className="text-right font-semibold">-{formatCurrency(invoice.discountAmount || 0)}</TableCell>
                 </TableRow>
               )}
+              {invoice.giftCardApplied ? (
+                <TableRow className="text-emerald-700 bg-emerald-500/5">
+                  <TableCell colSpan={3} className="text-right font-medium">
+                    <span className="inline-flex items-center gap-1">
+                      <Gift className="w-3.5 h-3.5" />
+                      Gift card credit
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right font-semibold">
+                    -{formatCurrency(invoice.giftCardApplied)}
+                  </TableCell>
+                </TableRow>
+              ) : null}
               <TableRow>
                 <TableCell colSpan={3} className="text-right font-medium">
                   Tax

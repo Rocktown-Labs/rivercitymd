@@ -56,6 +56,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Gift,
   Loader2,
   Tag,
   X,
@@ -396,6 +397,21 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     discountValue: number;
     discountAmount: number;
   } | null>(null);
+  const [giftCardCodeInput, setGiftCardCodeInput] = useState("");
+  const [giftCardPin, setGiftCardPin] = useState("");
+  const [giftCardNeedsPin, setGiftCardNeedsPin] = useState(false);
+  const [giftCardStatus, setGiftCardStatus] = useState<
+    "idle" | "checking" | "valid" | "invalid"
+  >("idle");
+  const [giftCardMessage, setGiftCardMessage] = useState("");
+  const [appliedGiftCard, setAppliedGiftCard] = useState<{
+    giftCardId: string;
+    codeLast4: string;
+    balance: number;
+    appliedAmount: number;
+    requiresPin: boolean;
+    claimedByCurrentUser: boolean;
+  } | null>(null);
 
   const step1Form = useForm<Step1Data>({
     resolver: zodResolver(step1Schema),
@@ -426,6 +442,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
   const calculateTravelFee = useAction(api.travelFees.calculate);
   const createBookingCheckout = useAction(api.payments.createBookingCheckout);
   const validateBookingPromoCode = useAction(api.payments.validateBookingPromoCode);
+  const validateGiftCard = useAction(api.giftCards.validateForBooking);
   const saveOutOfAreaLead = useMutation(api.bookingDrafts.saveOutOfAreaLead);
   const saveOutOfAreaRequest = useMutation(api.bookingDrafts.saveOutOfAreaRequest);
   const convex = useConvex();
@@ -710,6 +727,52 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
     }, 500);
     return () => clearTimeout(handle);
   }, [promoCodeInput, checkoutSummary.orderTotal, validateBookingPromoCode]);
+
+  useEffect(() => {
+    const code = giftCardCodeInput.trim();
+    if (!code) {
+      setGiftCardStatus("idle");
+      setGiftCardMessage("");
+      setGiftCardNeedsPin(false);
+      setAppliedGiftCard(null);
+      return;
+    }
+    setGiftCardStatus("checking");
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await validateGiftCard({
+            code,
+            pin: giftCardPin.trim() || undefined,
+            orderAmount: checkoutSummary.orderTotal,
+          });
+          setAppliedGiftCard(result);
+          setGiftCardStatus("valid");
+          setGiftCardNeedsPin(result.requiresPin && !giftCardPin.trim());
+          setGiftCardMessage(
+            result.requiresPin && !giftCardPin.trim()
+              ? "Enter the 4-digit PIN to apply this card."
+              : `Gift card ending ${result.codeLast4} — up to $${result.appliedAmount.toFixed(2)} will be applied.`,
+          );
+        } catch (error) {
+          const message = getCustomerErrorMessage(
+            error,
+            "Invalid gift card or PIN.",
+          );
+          setAppliedGiftCard(null);
+          setGiftCardStatus("invalid");
+          setGiftCardNeedsPin(message.toLowerCase().includes("pin"));
+          setGiftCardMessage(message);
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [
+    giftCardCodeInput,
+    giftCardPin,
+    checkoutSummary.orderTotal,
+    validateGiftCard,
+  ]);
 
   const watchedStreet = step1Form.watch("street");
   const watchedCity = step1Form.watch("city");
@@ -1675,23 +1738,30 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
         bufferMinutes: travelQuote?.bufferMinutes ?? 0,
       });
 
-      const { url } = await createBookingCheckout({
+      const checkout = await createBookingCheckout({
         draftId,
         origin: window.location.origin,
         couponCode: appliedCoupon?.code ?? "",
+        giftCardCode: giftCardCodeInput.trim() || undefined,
+        giftCardPin: giftCardPin.trim() || undefined,
       });
 
-      if (url) {
-        resetBooking();
-        setSubscriptionSelections({});
-        setSubscriptionFrequency("monthly");
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("selectedAddress");
-          localStorage.removeItem("appointmentFormData");
-        }
-        window.location.href = url;
+      resetBooking();
+      setSubscriptionSelections({});
+      setSubscriptionFrequency("monthly");
+      setGiftCardCodeInput("");
+      setGiftCardPin("");
+      setAppliedGiftCard(null);
+      setGiftCardStatus("idle");
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("selectedAddress");
+        localStorage.removeItem("appointmentFormData");
+      }
+
+      if (checkout.status === "completed" || !checkout.url) {
+        router.push(`/booking/success?token=${encodeURIComponent(checkout.token)}`);
       } else {
-        throw new Error("Failed to create checkout session");
+        window.location.href = checkout.url;
       }
     } catch (error) {
       console.error("Booking error:", error);
@@ -2981,6 +3051,14 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
           const effectivePaymentOption = maintenanceSelected ? "full" : paymentOption;
           const dueNow = effectivePaymentOption === "full" ? discountedTotal : Math.min(depositTotal, discountedTotal);
           const remainingBalance = Math.max(0, discountedTotal - dueNow);
+          const giftCardAppliedNow =
+            appliedGiftCard && giftCardStatus === "valid"
+              ? Math.min(appliedGiftCard.appliedAmount, dueNow)
+              : 0;
+          const finalDueNow = Math.max(
+            0,
+            Math.round((dueNow - giftCardAppliedNow) * 100) / 100,
+          );
 
           return (
             <div className="space-y-6">
@@ -3044,6 +3122,17 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     <span className="text-green-600">-${discountAmount.toFixed(2)}</span>
                   </div>
                 )}
+                {giftCardAppliedNow > 0 && (
+                  <div className="flex justify-between text-sm font-medium mt-1">
+                    <span className="text-green-600 flex items-center gap-1">
+                      <Gift className="h-3 w-3" />
+                      Gift card ending {appliedGiftCard?.codeLast4}
+                    </span>
+                    <span className="text-green-600">
+                      -${giftCardAppliedNow.toFixed(2)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between border-t border-border/50 pt-2 text-base font-bold mt-2">
                   <span className="text-foreground">Total</span>
                   <span className="text-foreground">${discountedTotal.toFixed(2)}</span>
@@ -3052,7 +3141,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                   <div className="mt-3 space-y-1 border-t border-border/30 pt-3">
                     <div className="flex justify-between text-sm font-medium">
                       <span className="text-muted-foreground">Deposit Due Today</span>
-                      <span className="text-foreground">${dueNow.toFixed(2)}</span>
+                      <span className="text-foreground">${finalDueNow.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm font-medium">
                       <span className="text-muted-foreground">Remaining Balance</span>
@@ -3105,6 +3194,71 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     </p>
                   )}
                 </div>
+
+                {/* Gift Card */}
+                <div className="mt-3 border-t border-border/30 pt-3">
+                  <div className="relative">
+                    <Gift className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Gift card code"
+                      value={giftCardCodeInput}
+                      onChange={(e) =>
+                        setGiftCardCodeInput(e.target.value.toUpperCase())
+                      }
+                      className={`h-9 pl-8 pr-8 font-mono text-sm ${
+                        giftCardStatus === "valid"
+                          ? "border-green-500 focus-visible:ring-green-500"
+                          : giftCardStatus === "invalid"
+                            ? "border-red-500 focus-visible:ring-red-500"
+                            : ""
+                      }`}
+                      autoCapitalize="characters"
+                      aria-invalid={giftCardStatus === "invalid"}
+                    />
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                      {giftCardStatus === "checking" && (
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      )}
+                      {giftCardStatus === "valid" && (
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                      )}
+                      {giftCardStatus === "invalid" && (
+                        <X className="h-4 w-4 text-red-500" />
+                      )}
+                    </span>
+                  </div>
+                  {(giftCardNeedsPin ||
+                    (appliedGiftCard?.requiresPin && !giftCardPin)) && (
+                    <Input
+                      placeholder="Gift card PIN"
+                      value={giftCardPin}
+                      onChange={(e) =>
+                        setGiftCardPin(
+                          e.target.value.replace(/\D/g, "").slice(0, 4),
+                        )
+                      }
+                      inputMode="numeric"
+                      maxLength={4}
+                      className="mt-2 h-9 max-w-[180px] text-center font-mono tracking-[0.3em]"
+                    />
+                  )}
+                  {giftCardStatus === "valid" && giftCardMessage && (
+                    <p className="mt-1.5 text-xs font-medium text-green-600">
+                      {giftCardMessage}
+                    </p>
+                  )}
+                  {giftCardStatus === "invalid" && giftCardMessage && (
+                    <p className="mt-1.5 text-xs font-medium text-red-600">
+                      {giftCardMessage}
+                    </p>
+                  )}
+                  {giftCardStatus === "valid" && appliedGiftCard && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      ${appliedGiftCard.balance.toFixed(2)} available on this
+                      card. Any unused balance stays on it.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Payment Option Selector */}
@@ -3140,7 +3294,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     <div>
                       <span className="font-semibold text-sm text-foreground">Pay Deposit Now</span>
                       <span className="text-xs text-muted-foreground block mt-0.5">
-                        ${Math.min(depositTotal, discountedTotal).toFixed(2)} deposit now, remaining balance invoiced after service
+                        ${finalDueNow.toFixed(2)} deposit now, remaining balance invoiced after service
                       </span>
                     </div>
                   </label>
@@ -3162,7 +3316,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     <div>
                       <span className="font-semibold text-sm text-foreground">Pay Full Price Now</span>
                       <span className="text-xs text-muted-foreground block mt-0.5">
-                        ${discountedTotal.toFixed(2)} — pay entire amount upfront
+                        ${finalDueNow.toFixed(2)} — pay entire amount upfront
                       </span>
                     </div>
                   </label>
@@ -3184,7 +3338,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     <div>
                       <span className="font-semibold text-sm text-foreground">Pay Remaining in Person</span>
                       <span className="text-xs text-muted-foreground block mt-0.5">
-                        ${Math.min(depositTotal, discountedTotal).toFixed(2)} deposit now, pay balance in cash/card at service
+                        ${finalDueNow.toFixed(2)} deposit now, pay balance in cash/card at service
                       </span>
                     </div>
                   </label>
@@ -3201,7 +3355,7 @@ function BookingFlowContent({ auth }: { auth: BookingAuthState }) {
                     </span>
                     <span className="text-xs text-muted-foreground">Secure payment via Stripe</span>
                   </div>
-                  <span className="font-bold text-xl text-primary">${dueNow.toFixed(2)}</span>
+                  <span className="font-bold text-xl text-primary">${finalDueNow.toFixed(2)}</span>
                 </div>
                 {effectivePaymentOption !== "full" && (
                   <p className="text-xs text-muted-foreground mt-2">
