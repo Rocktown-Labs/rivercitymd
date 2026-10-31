@@ -4,6 +4,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [Unreleased]
 ### Added
+- **Gift Card Email Previews**: Added React Email previews for the recipient gift card email, purchaser receipt, and admin sale notification.
 - **Gift Card Dormancy and Escheatment Controls**: Added financial-activity tracking, purchaser billing-address capture, a dormant/unclaimed review with CSV export, manual breakage and escheatment write-offs with audit references, card reinstatement, and a liability reconciliation report with ledger CSV export. Cards still never expire and breakage is never recognized automatically.
 - **Gift Cards and Store Credit**: Added a Stripe-powered gift card storefront with $100–$500 presets and custom $100 increments, email or print-at-home delivery, a claimable digital wallet, a 3D flip card, optional 4-digit PINs, and a Convex balance ledger. Customers can redeem credit on booking deposits/full payments, admins can sell cards by payment link or cash, track outstanding liability, resend delivery, assign cards, apply credit to invoices, adjust balances, and void cards.
 - **Mobile Parity Completion**: The Expo app now manages Stripe coupons and Maintenance Club subscriptions, applies invoice discounts and reissues deposit invoices, edits and reschedules appointments, attaches before/after service photos, edits business hours and per-vehicle-type pricing, resumes abandoned checkout or claims a converted booking, registers for push notifications, and shows an offline banner with booking guards.
