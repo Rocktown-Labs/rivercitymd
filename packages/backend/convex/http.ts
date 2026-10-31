@@ -103,6 +103,19 @@ async function notifyAdminDepositPaid(ctx: any, args: {
   }
 }
 
+function getCheckoutBillingAddress(session: Stripe.Checkout.Session) {
+  const address = session.customer_details?.address;
+  if (!address) return undefined;
+  return {
+    line1: address.line1 ?? "",
+    line2: address.line2 ?? undefined,
+    city: address.city ?? "",
+    state: address.state ?? "",
+    postalCode: address.postal_code ?? "",
+    country: address.country ?? "",
+  };
+}
+
 async function fulfillBookingDraftCheckout(
   ctx: any,
   event: Stripe.Event,
@@ -208,6 +221,7 @@ registerRoutes(http, components.stripe, {
               : undefined,
           stripeCustomerId:
             typeof session.customer === "string" ? session.customer : undefined,
+          purchaserAddress: getCheckoutBillingAddress(session),
         });
         return;
       }
@@ -247,6 +261,7 @@ registerRoutes(http, components.stripe, {
               : undefined,
           stripeCustomerId:
             typeof session.customer === "string" ? session.customer : undefined,
+          purchaserAddress: getCheckoutBillingAddress(session),
         });
         return;
       }

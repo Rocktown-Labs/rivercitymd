@@ -14,6 +14,8 @@ import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
 import {
   GIFT_CARD_CLAIM_TTL_MS,
   GIFT_CARD_CURRENCY,
+  GIFT_CARD_DORMANCY_MS,
+  GIFT_CARD_DORMANCY_YEARS,
   GIFT_CARD_MAX_AMOUNT,
   GIFT_CARD_MIN_AMOUNT,
   GIFT_CARD_PRESETS,
@@ -24,6 +26,7 @@ import {
   generateGiftCardCode,
   generateGiftCardPin,
   getAvailableGiftCardBalance,
+  getGiftCardLastFinancialActivity,
   isValidGiftCardAmount,
   isValidGiftCardPin,
   normalizeGiftCardCode,
@@ -51,6 +54,14 @@ const orderTypeValidator = v.union(
   v.literal("booking"),
   v.literal("invoice"),
 );
+const giftCardAddressValidator = v.object({
+  line1: v.string(),
+  line2: v.optional(v.string()),
+  city: v.string(),
+  state: v.string(),
+  postalCode: v.string(),
+  country: v.string(),
+});
 
 function randomToken(): string {
   return `${crypto.randomUUID().replaceAll("-", "")}${crypto
@@ -116,6 +127,7 @@ async function createCheckoutSessionForGiftCard(
   );
   const sessionData = new URLSearchParams({
     mode: "payment",
+    billing_address_collection: "required",
     success_url: `${origin.replace(/\/$/, "")}/gift-cards/success?token=${encodeURIComponent(card.accessToken)}`,
     cancel_url: `${origin.replace(/\/$/, "")}/gift-cards?canceled=1`,
     "line_items[0][price_data][currency]": GIFT_CARD_CURRENCY,
@@ -299,6 +311,7 @@ export const createGiftCard = internalMutation({
     purchaserUserId: v.optional(v.id("users")),
     purchaserName: v.string(),
     purchaserEmail: v.optional(v.string()),
+    purchaserAddress: v.optional(giftCardAddressValidator),
     recipientName: v.optional(v.string()),
     recipientEmail: v.optional(v.string()),
     message: v.optional(v.string()),
@@ -362,6 +375,7 @@ export const createGiftCard = internalMutation({
       purchaserUserId: args.purchaserUserId,
       purchaserName: args.purchaserName,
       purchaserEmail: args.purchaserEmail,
+      purchaserAddress: args.purchaserAddress,
       recipientName,
       recipientEmail,
       message: args.message,
@@ -371,6 +385,7 @@ export const createGiftCard = internalMutation({
       claimTokenExpiresAt: claimToken ? now + GIFT_CARD_CLAIM_TTL_MS : undefined,
       accessToken,
       issuedAt: status === "active" ? now : undefined,
+      lastFinancialActivityAt: status === "active" ? now : undefined,
       createdByUserId: args.createdByUserId,
       notes: args.notes,
       createdAt: now,
@@ -438,6 +453,7 @@ export const activateFromCheckout = internalMutation({
     stripeCheckoutSessionId: v.string(),
     stripePaymentIntentId: v.optional(v.string()),
     stripeCustomerId: v.optional(v.string()),
+    purchaserAddress: v.optional(giftCardAddressValidator),
   },
   returns: v.union(v.null(), v.id("giftCards")),
   handler: async (ctx, args) => {
@@ -459,6 +475,8 @@ export const activateFromCheckout = internalMutation({
       balance: card.amount,
       reservedBalance: 0,
       issuedAt: now,
+      lastFinancialActivityAt: now,
+      purchaserAddress: args.purchaserAddress ?? card.purchaserAddress,
       stripePaymentIntentId: args.stripePaymentIntentId,
       stripeCustomerId: args.stripeCustomerId,
       updatedAt: now,
@@ -525,15 +543,17 @@ export const handlePurchaseRefund = internalMutation({
       .collect();
     const hasRedeemed = redemptions.some((tx) => tx.type === "redeem");
 
+    const now = Date.now();
     if (!hasRedeemed && card.balance === card.amount) {
       await ctx.db.patch(card._id, {
         status: "voided",
         balance: 0,
         reservedBalance: 0,
-        refundedAt: Date.now(),
+        refundedAt: now,
         refundAmount: args.refundAmount,
         voidReason: "Purchase refunded",
-        updatedAt: Date.now(),
+        lastFinancialActivityAt: now,
+        updatedAt: now,
       });
       await ctx.db.insert("giftCardTransactions", {
         giftCardId: card._id,
@@ -542,18 +562,19 @@ export const handlePurchaseRefund = internalMutation({
         balanceBefore: card.balance,
         balanceAfter: 0,
         note: "Purchase refunded before redemption",
-        createdAt: Date.now(),
+        createdAt: now,
       });
       return;
     }
 
     await ctx.db.patch(card._id, {
-      refundedAt: Date.now(),
+      refundedAt: now,
       refundAmount: args.refundAmount,
       notes: [card.notes, "Purchase refunded after partial use — review manually."]
         .filter(Boolean)
         .join("\n"),
-      updatedAt: Date.now(),
+      lastFinancialActivityAt: now,
+      updatedAt: now,
     });
   },
 });
@@ -1141,6 +1162,7 @@ export const captureReservation = internalMutation({
       balance: balanceAfter,
       reservedBalance: reservedAfter,
       status: balanceAfter <= 0 ? "depleted" : "active",
+      lastFinancialActivityAt: now,
       updatedAt: now,
     });
     await ctx.db.patch(reservation._id, {
@@ -1207,6 +1229,7 @@ export const captureReservationToInvoice = internalMutation({
         Math.round((card.reservedBalance - reservation.amount) * 100) / 100,
       ),
       status: balanceAfter <= 0 ? "depleted" : "active",
+      lastFinancialActivityAt: now,
       updatedAt: now,
     });
     await ctx.db.patch(reservation._id, {
@@ -1483,13 +1506,217 @@ export const getAdminStats = query({
       .filter((tx) => tx.type === "redeem" && tx.createdAt >= monthStart)
       .reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
 
+    const dormancyThreshold = Date.now() - GIFT_CARD_DORMANCY_MS;
+    const dormantCards = activeCards.filter(
+      (card) =>
+        getAvailableGiftCardBalance(card) > 0 &&
+        getGiftCardLastFinancialActivity(card) < dormancyThreshold,
+    );
+
     return {
       outstanding: roundCurrency(outstanding),
       activeCount: activeCards.length,
       soldThisMonth: roundCurrency(soldThisMonth),
       redeemedThisMonth: roundCurrency(redeemedThisMonth),
       totalCards: cards.length,
+      dormancyYears: GIFT_CARD_DORMANCY_YEARS,
+      dormantCount: dormantCards.length,
+      dormantLiability: roundCurrency(
+        dormantCards.reduce(
+          (sum, card) => sum + getAvailableGiftCardBalance(card),
+          0,
+        ),
+      ),
     };
+  },
+});
+
+export const listDormant = query({
+  args: {
+    asOf: v.optional(v.number()),
+    years: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const asOf = args.asOf ?? Date.now();
+    const years = args.years ?? GIFT_CARD_DORMANCY_YEARS;
+    const threshold = asOf - years * 365.25 * 24 * 60 * 60 * 1000;
+    const cards = await ctx.db.query("giftCards").collect();
+
+    return cards
+      .filter(
+        (card) =>
+          card.status === "active" &&
+          getAvailableGiftCardBalance(card) > 0 &&
+          getGiftCardLastFinancialActivity(card) < threshold,
+      )
+      .sort(
+        (a, b) =>
+          getGiftCardLastFinancialActivity(a) -
+          getGiftCardLastFinancialActivity(b),
+      )
+      .map((card) => {
+        const lastFinancialActivityAt = getGiftCardLastFinancialActivity(card);
+        return {
+          _id: card._id,
+          codeLast4: card.codeLast4,
+          status: card.status,
+          amount: card.amount,
+          balance: card.balance,
+          reservedBalance: card.reservedBalance,
+          availableBalance: getAvailableGiftCardBalance(card),
+          purchaserName: card.purchaserName,
+          purchaserEmail: card.purchaserEmail,
+          purchaserAddress: card.purchaserAddress,
+          recipientName: card.recipientName,
+          recipientEmail: card.recipientEmail,
+          deliveryMethod: card.deliveryMethod,
+          issuedAt: card.issuedAt,
+          lastFinancialActivityAt,
+          daysDormant: Math.floor(
+            (asOf - lastFinancialActivityAt) / (1000 * 60 * 60 * 24),
+          ),
+          createdAt: card.createdAt,
+        };
+      });
+  },
+});
+
+export const getLiabilityReconciliation = query({
+  args: {
+    from: v.optional(v.number()),
+    to: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const from = args.from ?? 0;
+    const to = args.to ?? Date.now();
+    const transactions = await ctx.db
+      .query("giftCardTransactions")
+      .collect();
+    const balanceChangingTypes = new Set([
+      "issue",
+      "redeem",
+      "refund",
+      "adjust",
+      "void",
+      "breakage",
+      "escheatment",
+    ]);
+
+    let opening = 0;
+    let issued = 0;
+    let redeemed = 0;
+    let refunds = 0;
+    let adjustments = 0;
+    let voids = 0;
+    let breakage = 0;
+    let escheatment = 0;
+    let transactionCount = 0;
+
+    for (const tx of transactions) {
+      if (!balanceChangingTypes.has(tx.type)) continue;
+      if (tx.createdAt < from) {
+        opening += tx.amount;
+        continue;
+      }
+      if (tx.createdAt > to) continue;
+      transactionCount += 1;
+      switch (tx.type) {
+        case "issue":
+          issued += tx.amount;
+          break;
+        case "redeem":
+          redeemed += Math.abs(tx.amount);
+          break;
+        case "refund":
+          refunds += Math.abs(tx.amount);
+          break;
+        case "adjust":
+          adjustments += tx.amount;
+          break;
+        case "void":
+          voids += Math.abs(tx.amount);
+          break;
+        case "breakage":
+          breakage += Math.abs(tx.amount);
+          break;
+        case "escheatment":
+          escheatment += Math.abs(tx.amount);
+          break;
+      }
+    }
+
+    const cards = await ctx.db.query("giftCards").collect();
+    const ledgerBalance = cards.reduce((sum, card) => sum + card.balance, 0);
+    const closing =
+      opening +
+      issued -
+      redeemed +
+      adjustments -
+      refunds -
+      voids -
+      breakage -
+      escheatment;
+
+    return {
+      from,
+      to,
+      opening: roundCurrency(opening),
+      issued: roundCurrency(issued),
+      redeemed: roundCurrency(redeemed),
+      refunds: roundCurrency(refunds),
+      adjustments: roundCurrency(adjustments),
+      voids: roundCurrency(voids),
+      breakage: roundCurrency(breakage),
+      escheatment: roundCurrency(escheatment),
+      closing: roundCurrency(closing),
+      ledgerBalance: roundCurrency(ledgerBalance),
+      difference: roundCurrency(closing - ledgerBalance),
+      transactionCount,
+    };
+  },
+});
+
+export const listLedgerTransactions = query({
+  args: {
+    from: v.optional(v.number()),
+    to: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const from = args.from ?? 0;
+    const to = args.to ?? Date.now();
+    const transactions = await ctx.db
+      .query("giftCardTransactions")
+      .collect();
+    const cards = await ctx.db.query("giftCards").collect();
+    const cardById = new Map(cards.map((card) => [card._id, card]));
+
+    return transactions
+      .filter((tx) => tx.createdAt >= from && tx.createdAt <= to)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((tx) => {
+        const card = cardById.get(tx.giftCardId);
+        return {
+          _id: tx._id,
+          giftCardId: tx.giftCardId,
+          codeLast4: card?.codeLast4 ?? "unknown",
+          purchaserName: card?.purchaserName ?? "",
+          purchaserEmail: card?.purchaserEmail,
+          recipientName: card?.recipientName,
+          recipientEmail: card?.recipientEmail,
+          type: tx.type,
+          amount: tx.amount,
+          balanceBefore: tx.balanceBefore,
+          balanceAfter: tx.balanceAfter,
+          orderType: tx.orderType,
+          orderId: tx.orderId,
+          note: tx.note,
+          externalReference: tx.externalReference,
+          createdAt: tx.createdAt,
+        };
+      });
   },
 });
 
@@ -1536,6 +1763,7 @@ export const createAdminSale = action({
     paymentMethod: paymentMethodValidator,
     purchaserName: v.string(),
     purchaserEmail: v.optional(v.string()),
+    purchaserAddress: v.optional(giftCardAddressValidator),
     recipientName: v.optional(v.string()),
     recipientEmail: v.optional(v.string()),
     message: v.optional(v.string()),
@@ -1585,6 +1813,7 @@ export const createAdminSale = action({
       purchaserEmail: args.purchaserEmail
         ? normalizeGiftCardEmail(args.purchaserEmail)
         : undefined,
+      purchaserAddress: args.purchaserAddress,
       recipientName: args.recipientName?.trim() || undefined,
       recipientEmail: args.recipientEmail
         ? normalizeGiftCardEmail(args.recipientEmail)
@@ -1703,6 +1932,7 @@ export const voidGiftCard = mutation({
       reservedBalance: 0,
       voidedAt: now,
       voidReason: args.reason,
+      lastFinancialActivityAt: now,
       updatedAt: now,
     });
     await ctx.db.insert("giftCardTransactions", {
@@ -1717,6 +1947,119 @@ export const voidGiftCard = mutation({
       createdAt: now,
     });
     return null;
+  },
+});
+
+export const writeOffGiftCard = mutation({
+  args: {
+    giftCardId: v.id("giftCards"),
+    type: v.union(v.literal("breakage"), v.literal("escheatment")),
+    note: v.string(),
+    externalReference: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const adminId = await requireAdmin(ctx).then(() =>
+      getUserIdFromIdentity(ctx),
+    );
+    const card = await ctx.db.get(args.giftCardId);
+    if (!card) throw new Error("Gift card not found");
+    if (card.status === "voided") {
+      throw new Error("This gift card is already voided");
+    }
+    if (card.balance <= 0) {
+      throw new Error("This gift card has no remaining balance");
+    }
+    if (card.reservedBalance > 0) {
+      throw new Error(
+        "Resolve pending checkouts before writing off this gift card",
+      );
+    }
+    if (!args.note.trim()) {
+      throw new Error("A note is required for a breakage or escheatment entry");
+    }
+
+    const now = Date.now();
+    const balanceBefore = card.balance;
+    await ctx.db.patch(card._id, {
+      status: "voided",
+      balance: 0,
+      reservedBalance: 0,
+      voidedAt: now,
+      voidReason:
+        args.type === "breakage"
+          ? `Breakage write-off: ${args.note.trim()}`
+          : `Escheated: ${args.note.trim()}`,
+      lastFinancialActivityAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("giftCardTransactions", {
+      giftCardId: card._id,
+      type: args.type,
+      amount: -balanceBefore,
+      balanceBefore,
+      balanceAfter: 0,
+      orderType: "admin",
+      actorUserId: adminId ?? undefined,
+      note: args.note.trim(),
+      externalReference: args.externalReference?.trim() || undefined,
+      createdAt: now,
+    });
+    return null;
+  },
+});
+
+export const reinstateGiftCard = mutation({
+  args: {
+    giftCardId: v.id("giftCards"),
+    amount: v.number(),
+    note: v.string(),
+    externalReference: v.optional(v.string()),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const adminId = await requireAdmin(ctx).then(() =>
+      getUserIdFromIdentity(ctx),
+    );
+    const card = await ctx.db.get(args.giftCardId);
+    if (!card) throw new Error("Gift card not found");
+    if (card.status !== "voided") {
+      throw new Error("Only voided cards can be reinstated");
+    }
+    if (card.refundedAt || card.voidReason?.toLowerCase().includes("refund")) {
+      throw new Error(
+        "Cards voided by a purchase refund cannot be reinstated",
+      );
+    }
+    const amount = roundCurrency(args.amount);
+    if (amount <= 0) throw new Error("Reinstatement amount must be positive");
+    if (!args.note.trim()) {
+      throw new Error("A note is required to reinstate a gift card");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(card._id, {
+      status: "active",
+      balance: amount,
+      reservedBalance: 0,
+      voidedAt: undefined,
+      voidReason: undefined,
+      lastFinancialActivityAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("giftCardTransactions", {
+      giftCardId: card._id,
+      type: "adjust",
+      amount,
+      balanceBefore: 0,
+      balanceAfter: amount,
+      orderType: "admin",
+      actorUserId: adminId ?? undefined,
+      note: args.note.trim(),
+      externalReference: args.externalReference?.trim() || undefined,
+      createdAt: now,
+    });
+    return amount;
   },
 });
 
@@ -1748,6 +2091,7 @@ export const adjustGiftCardBalance = mutation({
     await ctx.db.patch(card._id, {
       balance: balanceAfter,
       status: balanceAfter <= 0 ? "depleted" : "active",
+      lastFinancialActivityAt: now,
       updatedAt: now,
     });
     await ctx.db.insert("giftCardTransactions", {
