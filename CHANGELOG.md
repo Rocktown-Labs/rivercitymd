@@ -48,6 +48,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 - **Saved Vehicles in Booking Flow**: Signed-in users now see their saved vehicles as one-click chips in the /book flow's vehicle step (fully pre-filled entries, removable), the first vehicle entry auto-fills from their saved data, and the phone number prefills in the personal-info step — no more retyping known information.
 
 ### Changed
+- **Homepage Pricing CTA**: Move the Book Appointment button and deposit note directly below the pricing cards, before Add-ons and Gift Cards.
 - **Gift Card Headline**: Updated the gift card page headline to “Give them that new-car feeling”.
 - **Dashboard Subscription Card Layout**: Stack the service time picker under the service date and show subscription cards in three columns on wide screens so they no longer stretch across the dashboard.
 - **Agent Docs**: Point `AGENTS.md` and `CLAUDE.md` at the monorepo Convex AI guidelines path (`packages/backend/convex/_generated/ai/guidelines.md`).

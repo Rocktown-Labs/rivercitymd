@@ -353,6 +353,28 @@ export function PricingSection() {
             )}
           </div>
 
+          {/* Desktop CTA */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: 0.4 }}
+            className="text-center mt-10 sm:mt-14"
+          >
+            <Button
+              size="lg"
+              disabled={bookingReadiness === undefined}
+              onClick={handleBookNow}
+              className="bg-primary hover:bg-primary/90 text-primary-foreground px-10 py-6 text-lg rounded-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
+            >
+              <Calendar className="w-5 h-5 mr-2" />
+              Book Appointment
+            </Button>
+            <p className="mt-4 text-sm text-muted-foreground">
+              A deposit is required to secure your appointment.
+            </p>
+          </motion.div>
+
           {addons.length > 0 && (
             <div className="mx-auto mt-12 max-w-6xl rounded-lg border border-border/40 bg-background p-5">
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border/40 pb-4">
@@ -404,28 +426,6 @@ export function PricingSection() {
           )}
 
           <GiftCardsSection />
-
-          {/* Desktop CTA */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6, delay: 0.4 }}
-            className="text-center mt-10 sm:mt-14"
-          >
-            <Button
-              size="lg"
-              disabled={bookingReadiness === undefined}
-              onClick={handleBookNow}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground px-10 py-6 text-lg rounded-lg shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5"
-            >
-              <Calendar className="w-5 h-5 mr-2" />
-              Book Appointment
-            </Button>
-            <p className="mt-4 text-sm text-muted-foreground">
-              A deposit is required to secure your appointment.
-            </p>
-          </motion.div>
         </div>
       </section>
     </>
