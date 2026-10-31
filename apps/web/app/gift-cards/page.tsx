@@ -26,7 +26,7 @@ export default async function GiftCardsPage({
               River City Gift Cards
             </p>
             <h1 className="mt-3 font-serif text-4xl leading-tight sm:text-5xl">
-              A clean car, wrapped in gold.
+              Give them that new-car feeling
             </h1>
             <p className="mt-4 text-sm leading-relaxed text-muted-foreground sm:text-base">
               Choose an amount, add a note, and send it by email or print it at
