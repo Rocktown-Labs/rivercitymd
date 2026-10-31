@@ -14,6 +14,9 @@ export const GIFT_CARD_TAX_CODE = "txcd_10502000";
 export const GIFT_CARD_PRODUCT_NAME = "River City Mobile Detailing Gift Card";
 export const GIFT_CARD_CLAIM_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 export const GIFT_CARD_REDEMPTION_TTL_MS = 1000 * 60 * 30;
+export const GIFT_CARD_DORMANCY_YEARS = 3;
+export const GIFT_CARD_DORMANCY_MS =
+  1000 * 60 * 60 * 24 * 365.25 * GIFT_CARD_DORMANCY_YEARS;
 export const GIFT_CARD_CURRENCY = "usd" as const;
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -65,6 +68,14 @@ export function isValidGiftCardAmount(amount: number): boolean {
 
 export function normalizeGiftCardEmail(email: string | undefined): string {
   return (email ?? "").trim().toLowerCase();
+}
+
+export function getGiftCardLastFinancialActivity(card: {
+  lastFinancialActivityAt?: number;
+  issuedAt?: number;
+  createdAt: number;
+}): number {
+  return card.lastFinancialActivityAt ?? card.issuedAt ?? card.createdAt;
 }
 
 export function getAvailableGiftCardBalance(card: {

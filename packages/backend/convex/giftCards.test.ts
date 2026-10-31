@@ -419,3 +419,203 @@ describe("gift card invoice application", () => {
     expect(updatedCard?.reservedBalance).toBe(0);
   });
 });
+
+describe("gift card dormancy and accounting controls", () => {
+  test("stores the purchaser billing address and tracks financial activity", async () => {
+    const t = convexTest(schema, modules);
+    const created = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Address Buyer",
+      purchaserEmail: "address@example.com",
+      purchaserAddress: {
+        line1: "123 Main St",
+        city: "Little Rock",
+        state: "AR",
+        postalCode: "72201",
+        country: "US",
+      },
+    });
+
+    const card = await t.run(async (ctx) => ctx.db.get(created._id));
+    expect(card?.purchaserAddress).toEqual({
+      line1: "123 Main St",
+      city: "Little Rock",
+      state: "AR",
+      postalCode: "72201",
+      country: "US",
+    });
+    expect(card?.lastFinancialActivityAt).toBeTruthy();
+  });
+
+  test("lists only cards with no financial activity for 3+ years", async () => {
+    const t = convexTest(schema, modules);
+    const adminId = await createUser(t, {
+      name: "Admin",
+      email: "dormancy-admin@example.com",
+      role: "admin",
+    });
+    const asAdmin = t.withIdentity({
+      subject: adminId,
+      email: "dormancy-admin@example.com",
+    });
+    const dormant = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Dormant Buyer",
+    });
+    const active = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Recent Buyer",
+    });
+    const fourYearsAgo = Date.now() - 4 * 365.25 * 24 * 60 * 60 * 1000;
+    await t.run(async (ctx) => {
+      await ctx.db.patch(dormant._id, {
+        lastFinancialActivityAt: fourYearsAgo,
+        issuedAt: fourYearsAgo,
+      });
+    });
+
+    const rows = await asAdmin.query(api.giftCards.listDormant, {});
+    expect(rows.map((row) => row._id)).toEqual([dormant._id]);
+    expect(rows[0]?.daysDormant).toBeGreaterThan(365);
+    expect(rows.some((row) => row._id === active._id)).toBe(false);
+  });
+
+  test("writes off breakage and escheatment with audit entries", async () => {
+    const t = convexTest(schema, modules);
+    const adminId = await createUser(t, {
+      name: "Admin",
+      email: "writeoff-admin@example.com",
+      role: "admin",
+    });
+    const asAdmin = t.withIdentity({
+      subject: adminId,
+      email: "writeoff-admin@example.com",
+    });
+    const breakageCard = await t.mutation(
+      internal.giftCards.createGiftCard,
+      {
+        amount: 100,
+        deliveryMethod: "print",
+        source: "admin_sale",
+        paymentMethod: "cash",
+        purchaserName: "Breakage Buyer",
+      },
+    );
+    const escheatCard = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 200,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Escheat Buyer",
+    });
+
+    await asAdmin.mutation(api.giftCards.writeOffGiftCard, {
+      giftCardId: breakageCard._id,
+      type: "breakage",
+      note: "CPA approved breakage",
+    });
+    await asAdmin.mutation(api.giftCards.writeOffGiftCard, {
+      giftCardId: escheatCard._id,
+      type: "escheatment",
+      note: "Remitted to Arkansas",
+      externalReference: "AR-2026-001",
+    });
+
+    const breakage = await t.run(async (ctx) =>
+      ctx.db.get(breakageCard._id),
+    );
+    expect(breakage?.status).toBe("voided");
+    expect(breakage?.balance).toBe(0);
+
+    const breakageTransactions = await t.run(async (ctx) =>
+      ctx.db
+        .query("giftCardTransactions")
+        .withIndex("by_gift_card", (q) =>
+          q.eq("giftCardId", breakageCard._id),
+        )
+        .collect(),
+    );
+    expect(
+      breakageTransactions.some((tx) => tx.type === "breakage"),
+    ).toBe(true);
+
+    const escheatTransactions = await t.run(async (ctx) =>
+      ctx.db
+        .query("giftCardTransactions")
+        .withIndex("by_gift_card", (q) =>
+          q.eq("giftCardId", escheatCard._id),
+        )
+        .collect(),
+    );
+    expect(
+      escheatTransactions.some(
+        (tx) =>
+          tx.type === "escheatment" &&
+          tx.externalReference === "AR-2026-001",
+      ),
+    ).toBe(true);
+  });
+
+  test("reconciles the ledger against active card balances", async () => {
+    const t = convexTest(schema, modules);
+    const adminId = await createUser(t, {
+      name: "Admin",
+      email: "reconcile-admin@example.com",
+      role: "admin",
+    });
+    const asAdmin = t.withIdentity({
+      subject: adminId,
+      email: "reconcile-admin@example.com",
+    });
+    const card = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Reconcile Buyer",
+    });
+    const reservationId = await t.mutation(
+      internal.giftCards.reserveForOrder,
+      {
+        giftCardId: card._id,
+        amount: 40,
+        orderType: "booking",
+        orderId: "reconcile_order",
+      },
+    );
+    await t.mutation(internal.giftCards.captureReservation, {
+      reservationId,
+    });
+    await asAdmin.mutation(api.giftCards.adjustGiftCardBalance, {
+      giftCardId: card._id,
+      amount: 10,
+      note: "Service recovery",
+    });
+    await asAdmin.mutation(api.giftCards.writeOffGiftCard, {
+      giftCardId: card._id,
+      type: "breakage",
+      note: "Remaining balance written off",
+    });
+
+    const report = await asAdmin.query(
+      api.giftCards.getLiabilityReconciliation,
+      {},
+    );
+    expect(report.issued).toBe(100);
+    expect(report.redeemed).toBe(40);
+    expect(report.adjustments).toBe(10);
+    expect(report.breakage).toBe(70);
+    expect(report.closing).toBe(0);
+    expect(report.ledgerBalance).toBe(0);
+    expect(report.difference).toBe(0);
+  });
+});
