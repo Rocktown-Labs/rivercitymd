@@ -1,241 +1,180 @@
 # River City Mobile Detailing
 
-A comprehensive web application for managing a mobile car detailing business. River City Mobile Detailing connects customers with professional detailers who come directly to customers' locations for convenient, high-quality vehicle detailing services.
+<div align="center">
+  <h3>Mobile vehicle detailing, booked around the customer</h3>
+  <p>A shared web, mobile, and real-time backend for service discovery, appointment booking, vehicle care, payments, and day-to-day business operations.</p>
+</div>
 
-## Features
+[rivercitymd.com](https://rivercitymd.com)
 
-### Public Marketing Website
+---
 
-- Professional landing page showcasing detailing services
-- Service offerings: Quick Clean, Full Detail, Paint Correction, Ceramic Coating, Interior Detail, and Subscription Plans
-- Pricing information and customer testimonials
-- Contact forms and business information
+## 1. Product Overview
 
-### Customer Portal (Dashboard)
+**River City Mobile Detailing** brings professional detailing to a customer's location. The application supports the customer journey from choosing a service and adding vehicle details through booking, payment, appointment tracking, and post-service feedback. Business staff use a separate admin workspace to manage the service catalog, schedule, customers, payments, and operating settings.
 
-- **Appointment Booking**: Schedule mobile detailing services at your preferred location
-- **Vehicle Management**: Add and manage multiple vehicles (year, make, model, license plate, notes)
-- **Appointment Tracking**: View upcoming and past appointments with full details
-- **Invoice Management**: Access billing history and payment records
-- **Review System**: Rate and review completed services
-- **Profile Management**: Update personal information and preferences
+The service catalog includes Quick Clean, Full Detail, Interior Detail, Paint Correction, Ceramic Coating, and subscription plans. Pricing can account for vehicle size, and the booking flow is built around mobile service appointments rather than shop drop-offs.
 
-### Admin Portal
+## 2. Applications & Architecture
 
-- **Appointment Management**: View, confirm, reschedule, and complete customer appointments
-- **Customer Management**: Track customer history, service frequency, and spending
-- **Service Catalog**: Create and manage detailing services with pricing tiers
-- **Analytics Dashboard**: Business metrics, popular services, revenue tracking
-- **Payment Processing**: Handle Stripe payments and invoice generation
-- **Business Settings**: Configure availability, notifications, and business information
+| Workspace | Responsibility |
+| --- | --- |
+| `apps/web` | Next.js customer website, booking, account dashboard, and admin console |
+| `apps/native` | Expo / React Native mobile application for customer and business workflows |
+| `packages/backend` | Shared Convex schema, queries, mutations, actions, and scheduled work |
+| `packages/config` | Shared TypeScript configuration |
+| `packages/env` | Validated web and native environment configuration |
 
-### Core Business Logic
+The web and native clients use the same typed Convex backend. Clerk provides account authentication, Convex handles application data and real-time updates, and Stripe supports payment flows. This shared backend keeps appointments, vehicles, invoices, reviews, and business configuration consistent across clients.
 
-- **Mobile Service Model**: Technicians travel to customer locations (not a traditional shop)
-- **Availability Management**: Business hours and blocked time slots
-- **Pricing Structure**: Base prices with size-based adjustments (small/medium/large vehicles)
-- **Subscription Plans**: Recurring service discounts
-- **Payment Integration**: Stripe for secure payment processing
-- **Communication**: In-app chat between customers and admins
-- **Review & Rating System**: Customer feedback for service quality
+### Technology
 
-## Tech Stack
+| Layer | Technologies |
+| --- | --- |
+| Web | Next.js 16, React, TypeScript, Tailwind CSS, shadcn/ui |
+| Mobile | Expo, React Native, Expo Router, React Native Reusables |
+| Backend | Convex real-time database and server functions |
+| Authentication | Clerk with role-aware customer and admin access |
+| Payments | Stripe |
+| Workspace | pnpm, Turborepo |
 
-- **Web**: Next.js with React, TypeScript, Tailwind CSS, and shadcn/ui components
-- **Mobile**: Expo native-bare React Native app with Expo Router and React Native Reusables
-- **Backend**: Convex (serverless database with real-time capabilities), shared by web and mobile
-- **Authentication**: Clerk + Convex with role-based access (admin vs client), including Clerk native auth UI
-- **Database**: Convex with tables for users, vehicles, appointments, services, invoices, reviews, etc.
-- **File Storage**: Convex storage for business logos and customer images
-- **Payments**: Stripe integration for secure payment processing
-- **Real-time Features**: Live appointment updates, chat messaging
+## 3. Product Capabilities
 
-## Getting Started
+### Customer experience
+
+- Browse detailing services, descriptions, pricing, and subscription options.
+- Book a mobile service appointment for a selected vehicle and location.
+- Save multiple vehicles with year, make, model, plate, and notes.
+- Review upcoming and past appointments, invoices, and payment records.
+- Manage profile details, subscriptions, gift cards, and service reviews.
+- Follow appointment status and review service updates. The backend includes chat endpoints, but the web and native apps do not currently expose a customer chat screen.
+
+### Business operations
+
+- Review, confirm, reschedule, and complete appointments.
+- Manage customer profiles and service history.
+- Maintain the service catalog, vehicle-size pricing, gift cards, and subscriptions. Coupon discounts are managed through Stripe rather than a Convex coupon table.
+- Track invoices, payments, reviews, appointment activity, and business analytics.
+- Configure operating hours, availability, blocked time slots, notifications, and business information.
+- Review out-of-area requests and business activity logs.
+
+## 4. Data Model
+
+Convex stores the application records used by the web and mobile experiences:
+
+- **Users and business information** for customer identity, roles, and company settings.
+- **Vehicles and services** for customer vehicles, the service catalog, and pricing.
+- **Appointments and availability** for booking requests, calendar slots, and service status.
+- **Invoices, payments, subscriptions, and gift cards** for billing and promotions.
+- **Reviews** for customer feedback. Chat query and send endpoints exist in the backend, but are not currently connected to a shipped web or native interface.
+
+Convex file storage is used for business and customer imagery. Clerk identity is synchronized with the backend so protected operations can apply the right customer or admin permissions.
+
+## 5. Local Development
 
 ### Prerequisites
 
-- Node.js 22.13+
-- pnpm 11+
-- Convex account
+- Node.js 22.13 or newer
+- pnpm 11 or newer
+- A Convex deployment for backend development
 - Xcode or Android Studio for native builds (optional)
 
-### Installation
-
-1. Clone the repository:
-
-```bash
-git clone <repository-url>
-cd rivercitymd
-```
-
-2. Install dependencies:
+Install dependencies from the repository root:
 
 ```bash
 pnpm install
 ```
 
-3. Configure the web environment:
+Configure the web app from its example environment:
 
 ```bash
 cp apps/web/.env.example apps/web/.env.local
 ```
 
-Fill in the values in `apps/web/.env.local` using the variables below.
+Set the Clerk and Convex public configuration in the web and native app environments. For native development on a physical device, use a reachable development host for the Convex URL rather than `localhost`.
 
-4. Set up or connect the Convex deployment:
+Start the backend and web application in separate terminals:
 
 ```bash
 pnpm dev:backend
-```
-
-5. Run the web app:
-
-```bash
 pnpm dev:web
 ```
 
-To run the mobile app, copy `apps/native/.env.example` to `apps/native/.env`, set both public keys, then use a development build:
+For the Expo app, copy `apps/native/.env.example` to `apps/native/.env`, configure its public Clerk and Convex values, and run:
 
 ```bash
 pnpm dev:native
-pnpm --filter native ios     # or: pnpm --filter native android
+pnpm --filter native ios
+# or
+pnpm --filter native android
 ```
 
-### Workspace Commands
 
-- **Development**: `pnpm dev` (runs package dev tasks), `pnpm dev:web`, `pnpm dev:native`, `pnpm dev:backend`
-- **Build**: `pnpm build`
-- **Lint**: `pnpm check`
-- **Typecheck**: `pnpm typecheck`
-- **Test**: `pnpm test`
-- **Native UI validation**: `pnpm dlx @react-native-reusables/cli@latest doctor --cwd apps/native --summary`
+### Authentication, environment, and webhooks
 
-## Project Structure
+Clerk handles sign-in and synchronizes users with Convex. Configure the following values in the indicated deployment or local environment; obtain credentials from the relevant provider dashboard and keep secrets out of source control.
 
-```
-├── apps/
-│   ├── web/              # Existing Next.js web app and shadcn/ui components
-│   └── native/           # Expo native-bare app and React Native Reusables UI
-├── packages/
-│   ├── backend/          # Shared Convex functions, schema, and generated API
-│   ├── config/           # Shared TypeScript configuration
-│   └── env/              # Explicit web/native environment modules
-├── turbo.json            # Workspace task graph
-└── pnpm-workspace.yaml   # Workspace package boundaries
-```
+| Environment | Variables | Purpose |
+| --- | --- | --- |
+| Convex | `CONVEX_SITE_URL`, `STRIPE_SECRET_KEY` | Convex site URL and server-side Stripe operations |
+| Web | `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `NEXT_PUBLIC_CONVEX_URL` | Canonical site metadata, Clerk sign-in and user sync, and Convex client access |
+| Native | `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`, `EXPO_PUBLIC_CONVEX_URL` | Clerk sign-in and Convex access; use the computer's LAN IP for physical-device development, not `localhost` |
 
-The native app imports `@rivercitymd/backend/convex/_generated/api`, so mobile screens use the same typed Convex functions as the web app without duplicating backend logic.
+The Clerk native sign-in UI uses `AuthView` from `@clerk/expo/native`, which requires `expo-dev-client` and an iOS or Android development build; it does not run in Expo Go. Enable Clerk's Native API and register the app's bundle ID or package name in the Clerk Dashboard.
 
-## Database Schema
-
-The application uses Convex with the following main tables:
-
-- `users` - Customer and admin accounts
-- `vehicles` - Customer vehicles to be detailed
-- `services` - Available detailing services
-- `appointments` - Scheduled service appointments
-- `invoices` - Billing and payment records
-- `reviews` - Customer feedback
-- `chatMessages` - Communication between customers and admins
-- `businessInfo` - Business configuration and settings
-
-## Authentication
-
-The app uses Clerk for authentication and Convex for application data/authorization:
-
-- **Clients**: Can book appointments, manage vehicles, view invoices
-- **Admins**: Full access to business management, customer data, analytics
-
-### Authentication Setup
-
-#### Environment Variables
-
-**Convex Environment Variables:**
-
-Add these to your Convex environment:
-
-- `CONVEX_SITE_URL`: Your Convex deployment URL (e.g., `https://your-project.convex.cloud`)
-- `STRIPE_SECRET_KEY`: Your Stripe secret key for payment processing
-
-**Next.js Environment Variables:**
-
-Add these to your `.env.local` file:
-
-- `NEXT_PUBLIC_SITE_URL`: Your production site URL for SEO metadata (Open Graph, structured data, sitemap)
-  - Current (Vercel): `https://your-app.vercel.app`
-  - Production: `https://rivercitymd.com`
-  - Used for: Social media previews, structured data, canonical URLs
-
-#### Clerk + Convex Configuration
-
-Authentication is powered by Clerk in the web and native apps and synchronized into Convex in `packages/backend/convex/auth.ts`, `packages/backend/convex/users.ts`, and `packages/backend/convex/http.ts`.
-
-Required web environment variables include:
-
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
-- `CLERK_WEBHOOK_SECRET`
-- `NEXT_PUBLIC_CONVEX_URL`
-
-For the native app, set these in `apps/native/.env`:
-
-- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `EXPO_PUBLIC_CONVEX_URL` (use your computer's LAN IP for local device development, not `localhost`)
-
-The native auth screens use Clerk's `AuthView` from `@clerk/expo/native`. This is a native component and requires `expo-dev-client` plus an iOS/Android development build; it is not available in Expo Go. Enable Clerk's Native API and register the app's iOS bundle ID / Android package name in the Clerk Dashboard before testing sign-in.
-
-### Webhook Endpoints
-
-Configure these server endpoints in production:
+Configure these production webhook endpoints:
 
 - Stripe: `/stripe/webhook`
 - Clerk: `/clerk-users-webhook`
 - Resend: `/resend-webhook`
 
-Recommended Stripe event subscriptions for `/stripe/webhook`:
+Subscribe the Stripe endpoint to `checkout.session.completed`, `customer.created`, `customer.updated`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.created`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `payment_intent.succeeded`, and `payment_intent.payment_failed`. Subscribe the Clerk endpoint to `user.created`, `user.updated`, and `user.deleted`.
 
-- `checkout.session.completed`
-- `customer.created`
-- `customer.updated`
-- `customer.subscription.created`
-- `customer.subscription.updated`
-- `customer.subscription.deleted`
-- `invoice.created`
-- `invoice.finalized`
-- `invoice.paid`
-- `invoice.payment_failed`
-- `payment_intent.succeeded`
-- `payment_intent.payment_failed`
+## 6. Workspace Commands
 
-Recommended Clerk event subscriptions for `/clerk-users-webhook`:
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Start workspace development tasks |
+| `pnpm dev:web` | Start the web app |
+| `pnpm dev:native` | Start the Expo app |
+| `pnpm dev:backend` | Start the Convex backend |
+| `pnpm build` | Build configured workspaces |
+| `pnpm check` | Run workspace lint tasks |
+| `pnpm typecheck` | Type-check configured workspaces |
+| `pnpm test` | Run configured tests |
 
-- `user.created`
-- `user.updated`
-- `user.deleted`
+## 7. Repository Layout
 
-#### Troubleshooting Auth Issues
+```text
+rivercitymd/
+├── apps/
+│   ├── web/                 # Next.js website, customer portal, and admin console
+│   └── native/              # Expo / React Native application
+├── packages/
+│   ├── backend/             # Convex functions, schema, and generated API
+│   ├── config/              # Shared TypeScript configuration
+│   └── env/                 # Web and native environment validation
+├── package.json
+├── pnpm-workspace.yaml
+└── turbo.json
+```
 
-- **Auth initialization failures**: Check Clerk keys and `NEXT_PUBLIC_CONVEX_URL`
-- **Sign-in failures**: Verify Clerk users and webhook configuration
-- **Guest payment follow-up issues**: Check `/stripe/webhook` logs and the admin webhook health panel
-- **Server errors**: Check Convex dashboard for deployment issues or missing env vars
+## 8. Quality Checks
 
-## Payment Processing
+Before proposing code changes, run the relevant repository checks:
 
-Integrated with Stripe for secure payment processing:
+```bash
+pnpm check
+pnpm typecheck
+pnpm test
+```
 
-- Payment method storage
-- Invoice generation
-- Subscription management
-- Automatic payment processing
+For a production build, run `pnpm build`. Environment files contain local credentials and must not be committed.
 
-## Contributing
+## Contributing and License
 
-1. Follow the code style guidelines in `AGENTS.md`
-2. Run `pnpm test` before submitting changes
-3. Ensure linting and types pass: `pnpm check && pnpm typecheck`
-4. Test the affected app in development mode: `pnpm dev:web` or `pnpm dev:native`
+Follow the guidance in [AGENTS.md](AGENTS.md), and run the relevant checks before submitting changes. This private project is proprietary to River City Mobile Detailing.
 
-## License
-
-This project is private and proprietary to River City Mobile Detailing.
+<div align="center">
+  <sub>Built for convenient, on-location vehicle care in Central Arkansas.</sub>
+</div>
