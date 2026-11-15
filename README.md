@@ -47,13 +47,13 @@ The web and native clients use the same typed Convex backend. Clerk provides acc
 - Save multiple vehicles with year, make, model, plate, and notes.
 - Review upcoming and past appointments, invoices, and payment records.
 - Manage profile details, subscriptions, gift cards, and service reviews.
-- Follow appointment status and communicate with the business through in-app chat.
+- Follow appointment status and review service updates. The backend includes chat endpoints, but the web and native apps do not currently expose a customer chat screen.
 
 ### Business operations
 
 - Review, confirm, reschedule, and complete appointments.
 - Manage customer profiles and service history.
-- Maintain the service catalog, vehicle-size pricing, coupons, gift cards, and subscriptions.
+- Maintain the service catalog, vehicle-size pricing, gift cards, and subscriptions. Coupon discounts are managed through Stripe rather than a Convex coupon table.
 - Track invoices, payments, reviews, appointment activity, and business analytics.
 - Configure operating hours, availability, blocked time slots, notifications, and business information.
 - Review out-of-area requests and business activity logs.
@@ -65,8 +65,8 @@ Convex stores the application records used by the web and mobile experiences:
 - **Users and business information** for customer identity, roles, and company settings.
 - **Vehicles and services** for customer vehicles, the service catalog, and pricing.
 - **Appointments and availability** for booking requests, calendar slots, and service status.
-- **Invoices, payments, subscriptions, coupons, and gift cards** for billing and promotions.
-- **Reviews and chat messages** for customer feedback and service communication.
+- **Invoices, payments, subscriptions, and gift cards** for billing and promotions.
+- **Reviews** for customer feedback. Chat query and send endpoints exist in the backend, but are not currently connected to a shipped web or native interface.
 
 Convex file storage is used for business and customer imagery. Clerk identity is synchronized with the backend so protected operations can apply the right customer or admin permissions.
 
@@ -109,6 +109,27 @@ pnpm --filter native ios
 pnpm --filter native android
 ```
 
+
+### Authentication, environment, and webhooks
+
+Clerk handles sign-in and synchronizes users with Convex. Configure the following values in the indicated deployment or local environment; obtain credentials from the relevant provider dashboard and keep secrets out of source control.
+
+| Environment | Variables | Purpose |
+| --- | --- | --- |
+| Convex | `CONVEX_SITE_URL`, `STRIPE_SECRET_KEY` | Convex site URL and server-side Stripe operations |
+| Web | `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `NEXT_PUBLIC_CONVEX_URL` | Canonical site metadata, Clerk sign-in and user sync, and Convex client access |
+| Native | `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`, `EXPO_PUBLIC_CONVEX_URL` | Clerk sign-in and Convex access; use the computer's LAN IP for physical-device development, not `localhost` |
+
+The Clerk native sign-in UI uses `AuthView` from `@clerk/expo/native`, which requires `expo-dev-client` and an iOS or Android development build; it does not run in Expo Go. Enable Clerk's Native API and register the app's bundle ID or package name in the Clerk Dashboard.
+
+Configure these production webhook endpoints:
+
+- Stripe: `/stripe/webhook`
+- Clerk: `/clerk-users-webhook`
+- Resend: `/resend-webhook`
+
+Subscribe the Stripe endpoint to `checkout.session.completed`, `customer.created`, `customer.updated`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.created`, `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `payment_intent.succeeded`, and `payment_intent.payment_failed`. Subscribe the Clerk endpoint to `user.created`, `user.updated`, and `user.deleted`.
+
 ## 6. Workspace Commands
 
 | Command | Purpose |
@@ -149,6 +170,10 @@ pnpm test
 ```
 
 For a production build, run `pnpm build`. Environment files contain local credentials and must not be committed.
+
+## Contributing and License
+
+Follow the guidance in [AGENTS.md](AGENTS.md), and run the relevant checks before submitting changes. This private project is proprietary to River City Mobile Detailing.
 
 <div align="center">
   <sub>Built for convenient, on-location vehicle care in Central Arkansas.</sub>
