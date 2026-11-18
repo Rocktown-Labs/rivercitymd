@@ -42,15 +42,12 @@ describe("gift cards", () => {
     expect(issued?.balance).toBe(100);
     expect(issued?.claimedByUserId).toBe(recipientId);
 
-    const reservationId = await t.mutation(
-      internal.giftCards.reserveForOrder,
-      {
-        giftCardId: created._id,
-        amount: 40,
-        orderType: "booking",
-        orderId: "draft_1",
-      },
-    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: created._id,
+      amount: 40,
+      orderType: "booking",
+      orderId: "draft_1",
+    });
 
     const reserved = await t.run(async (ctx) => ctx.db.get(created._id));
     expect(reserved?.balance).toBe(100);
@@ -87,15 +84,12 @@ describe("gift cards", () => {
       purchaserName: "Buyer",
     });
 
-    const reservationId = await t.mutation(
-      internal.giftCards.reserveForOrder,
-      {
-        giftCardId: created._id,
-        amount: 75,
-        orderType: "invoice",
-        orderId: "invoice_1",
-      },
-    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: created._id,
+      amount: 75,
+      orderType: "invoice",
+      orderId: "invoice_1",
+    });
     await t.mutation(internal.giftCards.releaseReservation, {
       reservationId,
       reason: "Checkout cancelled",
@@ -253,15 +247,12 @@ describe("gift card booking conversion", () => {
       purchaserName: "Booking Customer",
       purchaserEmail: "booking@example.com",
     });
-    const reservationId = await t.mutation(
-      internal.giftCards.reserveForOrder,
-      {
-        giftCardId: card._id,
-        amount: 40,
-        orderType: "booking",
-        orderId: "draft_gift_card",
-      },
-    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: card._id,
+      amount: 40,
+      orderType: "booking",
+      orderId: "draft_gift_card",
+    });
 
     const draftId = await t.run(async (ctx) => {
       return await ctx.db.insert("bookingDrafts", {
@@ -308,6 +299,8 @@ describe("gift card booking conversion", () => {
       });
     });
 
+    await t.run(ctx => ctx.db.patch(card._id, { stripePaymentIntentId: "pi_booking_refund" }));
+    await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_booking_refund", refundAmount: 100 });
     const converted = await t.mutation(
       internal.bookingDrafts.convertSuccessfulCheckout,
       {
@@ -317,7 +310,9 @@ describe("gift card booking conversion", () => {
     );
 
     expect(converted?.isFullPayment).toBe(true);
-    const invoice = await t.run(async (ctx) => ctx.db.get(converted!.invoiceId));
+    const invoice = await t.run(async (ctx) =>
+      ctx.db.get(converted!.invoiceId),
+    );
     expect(invoice?.status).toBe("paid");
     expect(invoice?.total).toBe(100);
     expect(invoice?.giftCardApplied).toBe(40);
@@ -326,6 +321,8 @@ describe("gift card booking conversion", () => {
     const updatedCard = await t.run(async (ctx) => ctx.db.get(card._id));
     expect(updatedCard?.balance).toBe(60);
     expect(updatedCard?.reservedBalance).toBe(0);
+    await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_booking_refund", refundAmount: 100 });
+    expect((await t.run(ctx => ctx.db.get(card._id)))?.balance).toBe(0);
   });
 });
 
@@ -388,15 +385,12 @@ describe("gift card invoice application", () => {
       purchaserName: "Invoice Customer",
       purchaserEmail: "invoice@example.com",
     });
-    const reservationId = await t.mutation(
-      internal.giftCards.reserveForOrder,
-      {
-        giftCardId: card._id,
-        amount: 40,
-        orderType: "invoice",
-        orderId: String(invoiceId),
-      },
-    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: card._id,
+      amount: 40,
+      orderType: "invoice",
+      orderId: String(invoiceId),
+    });
 
     const result = await t.mutation(
       internal.giftCards.captureReservationToInvoice,
@@ -409,6 +403,13 @@ describe("gift card invoice application", () => {
 
     expect(result.remainingBalance).toBe(60);
     expect(result.status).toBe("draft");
+    expect(
+      await t.mutation(internal.giftCards.captureReservationToInvoice, {
+        reservationId,
+        invoiceId,
+      }),
+    ).toEqual(result);
+
     const invoice = await t.run(async (ctx) => ctx.db.get(invoiceId));
     expect(invoice?.giftCardApplied).toBe(40);
     expect(invoice?.remainingBalance).toBe(60);
@@ -500,16 +501,13 @@ describe("gift card dormancy and accounting controls", () => {
       subject: adminId,
       email: "writeoff-admin@example.com",
     });
-    const breakageCard = await t.mutation(
-      internal.giftCards.createGiftCard,
-      {
-        amount: 100,
-        deliveryMethod: "print",
-        source: "admin_sale",
-        paymentMethod: "cash",
-        purchaserName: "Breakage Buyer",
-      },
-    );
+    const breakageCard = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "print",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Breakage Buyer",
+    });
     const escheatCard = await t.mutation(internal.giftCards.createGiftCard, {
       amount: 200,
       deliveryMethod: "print",
@@ -530,37 +528,30 @@ describe("gift card dormancy and accounting controls", () => {
       externalReference: "AR-2026-001",
     });
 
-    const breakage = await t.run(async (ctx) =>
-      ctx.db.get(breakageCard._id),
-    );
+    const breakage = await t.run(async (ctx) => ctx.db.get(breakageCard._id));
     expect(breakage?.status).toBe("voided");
     expect(breakage?.balance).toBe(0);
 
     const breakageTransactions = await t.run(async (ctx) =>
       ctx.db
         .query("giftCardTransactions")
-        .withIndex("by_gift_card", (q) =>
-          q.eq("giftCardId", breakageCard._id),
-        )
+        .withIndex("by_gift_card", (q) => q.eq("giftCardId", breakageCard._id))
         .collect(),
     );
-    expect(
-      breakageTransactions.some((tx) => tx.type === "breakage"),
-    ).toBe(true);
+    expect(breakageTransactions.some((tx) => tx.type === "breakage")).toBe(
+      true,
+    );
 
     const escheatTransactions = await t.run(async (ctx) =>
       ctx.db
         .query("giftCardTransactions")
-        .withIndex("by_gift_card", (q) =>
-          q.eq("giftCardId", escheatCard._id),
-        )
+        .withIndex("by_gift_card", (q) => q.eq("giftCardId", escheatCard._id))
         .collect(),
     );
     expect(
       escheatTransactions.some(
         (tx) =>
-          tx.type === "escheatment" &&
-          tx.externalReference === "AR-2026-001",
+          tx.type === "escheatment" && tx.externalReference === "AR-2026-001",
       ),
     ).toBe(true);
   });
@@ -583,15 +574,12 @@ describe("gift card dormancy and accounting controls", () => {
       paymentMethod: "cash",
       purchaserName: "Reconcile Buyer",
     });
-    const reservationId = await t.mutation(
-      internal.giftCards.reserveForOrder,
-      {
-        giftCardId: card._id,
-        amount: 40,
-        orderType: "booking",
-        orderId: "reconcile_order",
-      },
-    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: card._id,
+      amount: 40,
+      orderType: "booking",
+      orderId: "reconcile_order",
+    });
     await t.mutation(internal.giftCards.captureReservation, {
       reservationId,
     });
@@ -618,4 +606,193 @@ describe("gift card dormancy and accounting controls", () => {
     expect(report.ledgerBalance).toBe(0);
     expect(report.difference).toBe(0);
   });
+});
+
+describe("gift card purchase refunds", () => {
+  test("partial refunds remove only the delta and duplicate events cannot remove credit twice", async () => {
+    const t = convexTest(schema, modules);
+    const card = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "self",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Buyer",
+    });
+    await t.run((ctx) =>
+      ctx.db.patch(card._id, { stripePaymentIntentId: "pi_refund" }),
+    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: card._id,
+      amount: 20,
+      orderType: "booking",
+      orderId: "draft",
+    });
+    for (const refundAmount of [25, 25, 10, 40]) {
+      await t.mutation(internal.giftCards.handlePurchaseRefund, {
+        stripePaymentIntentId: "pi_refund",
+        refundAmount,
+      });
+    }
+    expect(
+      (await t.run((ctx) => ctx.db.get(card._id)))?.refundPendingAmount,
+    ).toBe(40);
+    await expect(
+      t.mutation(internal.giftCards.reserveForOrder, {
+        giftCardId: card._id,
+        amount: 1,
+        orderType: "booking",
+        orderId: "new",
+      }),
+    ).rejects.toThrow(/refund is processing/);
+    await t.mutation(internal.giftCards.releaseReservation, { reservationId });
+    await t.mutation(internal.giftCards.handlePurchaseRefund, {
+      stripePaymentIntentId: "pi_refund",
+      refundAmount: 40,
+    });
+    const updated = await t.run((ctx) => ctx.db.get(card._id));
+    expect(updated).toMatchObject({
+      balance: 60,
+      reservedBalance: 0,
+      status: "active",
+      refundAmount: 40,
+    });
+    expect((await t.run((ctx) => ctx.db.get(reservationId)))?.status).toBe(
+      "released",
+    );
+    await expect(
+      t.mutation(internal.giftCards.captureReservation, { reservationId }),
+    ).rejects.toThrow(/released/);
+    const transactions = await t.run((ctx) =>
+      ctx.db
+        .query("giftCardTransactions")
+        .withIndex("by_gift_card", (q) => q.eq("giftCardId", card._id))
+        .collect(),
+    );
+    expect(
+      transactions.filter((tx) => tx.type === "refund").map((tx) => tx.amount),
+    ).toEqual([-40]);
+    expect(transactions.filter(tx => tx.type === "issue" || tx.type === "refund").reduce((sum, tx) => sum + tx.amount, 0)).toBe(60);
+  });
+
+  test("full purchase refund after partial redemption removes remaining spendable credit", async () => {
+    const t = convexTest(schema, modules);
+    const card = await t.mutation(internal.giftCards.createGiftCard, {
+      amount: 100,
+      deliveryMethod: "self",
+      source: "admin_sale",
+      paymentMethod: "cash",
+      purchaserName: "Buyer",
+    });
+    await t.run((ctx) =>
+      ctx.db.patch(card._id, { stripePaymentIntentId: "pi_used_refund" }),
+    );
+    const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+      giftCardId: card._id,
+      amount: 30,
+      orderType: "booking",
+      orderId: "draft",
+    });
+    await t.mutation(internal.giftCards.captureReservation, { reservationId });
+    await t.mutation(internal.giftCards.handlePurchaseRefund, {
+      stripePaymentIntentId: "pi_used_refund",
+      refundAmount: 100,
+    });
+    const updated = await t.run((ctx) => ctx.db.get(card._id));
+    expect(updated).toMatchObject({
+      balance: 0,
+      status: "voided",
+      refundAmount: 100,
+    });
+    expect(updated?.notes).toContain("$30");
+    await expect(
+      t.mutation(internal.giftCards.reserveForOrder, {
+        giftCardId: card._id,
+        amount: 1,
+        orderType: "booking",
+        orderId: "other",
+      }),
+    ).rejects.toThrow(/not active/);
+  });
+});
+
+test("a paid reservation can settle while a purchase refund is pending", async () => {
+  const t = convexTest(schema, modules);
+  const card = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "self",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+  });
+  await t.run((ctx) =>
+    ctx.db.patch(card._id, { stripePaymentIntentId: "pi_race" }),
+  );
+  const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+    giftCardId: card._id,
+    amount: 30,
+    orderType: "booking",
+    orderId: "paid_booking",
+  });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, {
+    stripePaymentIntentId: "pi_race",
+    refundAmount: 100,
+  });
+  expect((await t.run((ctx) => ctx.db.get(reservationId)))?.status).toBe(
+    "pending",
+  );
+  await t.mutation(internal.giftCards.captureReservation, { reservationId });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, {
+    stripePaymentIntentId: "pi_race",
+    refundAmount: 100,
+  });
+  const updated = await t.run((ctx) => ctx.db.get(card._id));
+  expect(updated).toMatchObject({
+    balance: 0,
+    reservedBalance: 0,
+    status: "voided",
+    refundAmount: 100,
+  });
+  expect(updated?.refundPendingAmount).toBeUndefined();
+  expect(updated?.notes).toContain("$30");
+});
+
+test("cumulative purchase refunds are idempotent without pending orders", async () => {
+  const t = convexTest(schema, modules);
+  const card = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "self",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+  });
+  await t.run((ctx) =>
+    ctx.db.patch(card._id, { stripePaymentIntentId: "pi_delta" }),
+  );
+  for (const refundAmount of [25, 25, 10, 40])
+    await t.mutation(internal.giftCards.handlePurchaseRefund, {
+      stripePaymentIntentId: "pi_delta",
+      refundAmount,
+    });
+  expect((await t.run((ctx) => ctx.db.get(card._id)))?.balance).toBe(60);
+  const transactions = await t.run((ctx) =>
+    ctx.db
+      .query("giftCardTransactions")
+      .withIndex("by_gift_card", (q) => q.eq("giftCardId", card._id))
+      .collect(),
+  );
+  expect(
+    transactions.filter((t) => t.type === "refund").map((t) => t.amount),
+  ).toEqual([-25, -15]);
+});
+
+test("a refunded reservation without a checkout can drain after its hold expires", async () => {
+  const t = convexTest(schema, modules);
+  const card = await t.mutation(internal.giftCards.createGiftCard, { amount: 100, deliveryMethod: "self", source: "admin_sale", paymentMethod: "cash", purchaserName: "Buyer" });
+  await t.run(ctx => ctx.db.patch(card._id, { stripePaymentIntentId: "pi_unattached" }));
+  const reservationId = await t.mutation(internal.giftCards.reserveForOrder, { giftCardId: card._id, amount: 30, orderType: "booking", orderId: "failed_checkout", expiresAt: Date.now() - 1 });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_unattached", refundAmount: 100 });
+  await t.mutation(internal.giftCards.releaseUnattachedRefundReservation, { reservationId });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_unattached", refundAmount: 100 });
+  expect((await t.run(ctx => ctx.db.get(card._id)))?.status).toBe("voided");
+  await expect(t.mutation(internal.giftCards.attachSessionToReservation, { reservationId, stripeCheckoutSessionId: "cs_too_late" })).rejects.toThrow(/no longer pending/);
 });

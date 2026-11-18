@@ -29,7 +29,7 @@ function statusVariant(status: string) {
 }
 
 export default function SubscriptionsScreen() {
-  const subscriptions = useQuery(api.subscriptions.getByUser);
+  const subscriptions = useQuery(api.subscriptions.getByUser, { today: new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }) });
   const createPortalSession = useAction(api.subscriptions.createCustomerPortalSession);
   const [isOpeningPortal, setIsOpeningPortal] = React.useState(false);
 
@@ -107,7 +107,7 @@ export default function SubscriptionsScreen() {
                   <View className="flex-row items-center gap-2">
                     <CalendarClock size={16} color={THEME.light.mutedForeground} />
                     <Text className="text-sm text-muted-foreground">
-                      {subscription.preferredTime} · {subscription.nextScheduledDate ?? "Next date pending"}
+                      {subscription.preferredTime} · {subscription.nextAppointmentDate ?? "Next date pending"}
                     </Text>
                   </View>
                   <View className="flex-row items-start gap-2">

@@ -81,7 +81,9 @@ export function getGiftCardLastFinancialActivity(card: {
 export function getAvailableGiftCardBalance(card: {
   balance: number;
   reservedBalance?: number;
+  refundPendingAmount?: number;
 }): number {
+  if (card.refundPendingAmount !== undefined) return 0;
   return Math.max(
     0,
     Math.round((card.balance - (card.reservedBalance ?? 0)) * 100) / 100,

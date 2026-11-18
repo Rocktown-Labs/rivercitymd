@@ -80,12 +80,15 @@ type SubscriptionRecord = {
   totalPrice: number;
   status: "pending_payment" | "active" | "paused" | "past_due" | "cancelled";
   nextScheduledDate?: string;
+  nextAppointmentDate?: string | null;
   startDate?: string;
   notes?: string;
   userName: string;
   userEmail?: string;
   serviceNames: string[];
   vehicleNames: string[];
+  vehiclePricingSnapshot?: Array<{ vehicleId: string; serviceId: string; year: number; make: string; model: string; vehicleTypeName: string; unitPrice: number }>;
+
 };
 
 type CustomerOption = {
@@ -106,6 +109,7 @@ type CustomerVehicle = {
   make: string;
   model: string;
   size?: "small" | "medium" | "large";
+  vehicleType?: { name: string } | null;
 };
 
 type SubscriptionServiceOption = {
@@ -154,7 +158,7 @@ function formatCurrency(amount: number) {
 }
 
 export default function SubscriptionsClient() {
-  const subscriptions = useQuery(api.subscriptions.list) as
+  const subscriptions = useQuery(api.subscriptions.list, { today: new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }) }) as
     | SubscriptionRecord[]
     | null
     | undefined;
@@ -223,6 +227,11 @@ export default function SubscriptionsClient() {
           <p className="text-xs text-muted-foreground">
             {row.original.vehicleNames.join(", ")}
           </p>
+          {row.original.vehiclePricingSnapshot?.map((entry) => (
+            <p key={`${entry.vehicleId}-${entry.serviceId}`} className="text-xs text-muted-foreground">
+              Saved rate: {entry.year} {entry.make} {entry.model} · {entry.vehicleTypeName} · {formatCurrency(entry.unitPrice)}
+            </p>
+          ))}
         </div>
       ),
     },
@@ -252,11 +261,11 @@ export default function SubscriptionsClient() {
       ),
     },
     {
-      accessorKey: "nextScheduledDate",
+      accessorKey: "nextAppointmentDate",
       header: "Next Appointment",
       cell: ({ row }) => (
         <span className="text-sm">
-          {row.original.nextScheduledDate || "—"}
+          {row.original.nextAppointmentDate || "—"}
         </span>
       ),
     },
@@ -573,11 +582,9 @@ function CreateSubscriptionForm({ onSuccess }: { onSuccess: () => void }) {
                   }}
                 />
                 {v.year} {v.make} {v.model}
-                {v.size && (
-                  <span className="text-xs text-muted-foreground">
-                    ({v.size})
-                  </span>
-                )}
+                <span className="text-xs text-muted-foreground">
+                  ({v.vehicleType?.name ?? "Category required — edit vehicle first"})
+                </span>
               </label>
             ))}
           </div>

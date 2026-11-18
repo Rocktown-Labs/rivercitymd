@@ -2,6 +2,20 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v0.1.4] - 2026-11-18
+### Fixed
+- Use vehicle category prices consistently for Maintenance Club enrollment and require a category when legacy sizes cannot identify the rate.
+- Show the actual upcoming club appointment and keep monthly visits within the next calendar month, preserving the original day where possible.
+- Replace manual vehicle sizes with category selection, accept multiword makes, canonicalize lookup casing, and discard stale web lookup responses.
+- Allow Google OAuth callbacks to finish and route authenticated users with missing backend tokens to onboarding instead of restarting sign-in.
+- Apply gift card purchase refunds incrementally, freeze new spending during purchase refunds while safely settling existing checkouts, and make invoice-credit retries idempotent.
+
+- Capture and display the vehicle, category, and per-cycle rate at enrollment; provide verified future-only Stripe rate corrections with an audit trail and preserve paid invoices.
+- Ensure refunded gift card holds without checkout sessions automatically settle after expiry.
+
+### Changed
+- Align Expo SDK 57 patch dependencies with its compatibility requirements so native verification can pass.
+
 ## [Unreleased]
 ### Added
 - **Gift Card Email Previews**: Added React Email previews for the recipient gift card email, purchaser receipt, and admin sale notification.

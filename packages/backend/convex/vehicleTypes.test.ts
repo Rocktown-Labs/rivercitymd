@@ -20,6 +20,34 @@ describe("vehicleTypes", () => {
     delete process.env.GEMINI_VEHICLE_CLASSIFIER_MODEL;
   });
 
+  test("canonicalizes lowercased makes and models for case-sensitive upstream options", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      const value = String(url);
+      if (value.includes("/menu/make")) return Response.json({ menuItem: { text: "Tesla", value: "Tesla" } });
+      if (value.includes("/menu/model")) return Response.json({ menuItem: { text: "Model S", value: "Model S" } });
+      if (value.includes("/menu/options")) {
+        expect(value).toContain("make=Tesla&model=Model%20S");
+        return Response.json({ menuItem: { value: "12345" } });
+      }
+      return Response.json({ VClass: "Large Cars" });
+    }));
+    expect((await t.action(api.vehicleTypes.classify, { year: 2025, make: "tesla", model: "model s" })).vehicleTypeName).toBe("Car");
+  });
+
+  test("yearless multiword make search uses vPIC when Fuel Economy is unavailable", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      const value = String(url);
+      if (requestHost(url) === "www.fueleconomy.gov") return Response.json({}, { status: 503 });
+      expect(value).toContain("make/land%20rover/");
+      return Response.json({ Results: [{ Make_Name: "LAND ROVER", Model_Name: "Range Rover" }] });
+    }));
+    const results = await t.action(api.vehicleTypes.searchModels, { query: "land rover range" });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]).toMatchObject({ make: "LAND ROVER", model: "Range Rover", source: "vpic" });
+  });
+
   test("seeds default vehicle types", async () => {
     const t = convexTest(schema, modules);
 

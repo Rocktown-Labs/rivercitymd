@@ -25,10 +25,13 @@ type SubscriptionCard = {
   _id: Id<"subscriptions">;
   serviceNames: string[];
   vehicleNames: string[];
+  vehiclePricingSnapshot?: Array<{ vehicleId: string; serviceId: string; year: number; make: string; model: string; vehicleTypeName: string; unitPrice: number }>;
+
   status: string;
   frequency: "biweekly" | "monthly";
   totalPrice: number;
   nextScheduledDate?: string;
+  nextAppointmentDate?: string | null;
   startDate?: string;
   preferredTime: string;
   estimatedDurationMinutes?: number;
@@ -275,6 +278,7 @@ function PendingPaymentControls({
 export default function SubscriptionsClient() {
   const subscriptions = useQuery(
     api.subscriptions.getByUser,
+    { today: new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" }) },
   ) as SubscriptionCard[] | undefined | null;
   const createPortalSession = useAction(api.subscriptions.createCustomerPortalSession);
   const startCheckout = useAction(api.subscriptions.startCheckout);
@@ -379,13 +383,18 @@ export default function SubscriptionsClient() {
                 <p className="text-sm font-medium">
                   {sub.vehicleNames.join(", ")}
                 </p>
+                {sub.vehiclePricingSnapshot?.map((entry) => (
+                  <p key={`${entry.vehicleId}-${entry.serviceId}`} className="text-xs text-muted-foreground">
+                    Saved rate: {entry.year} {entry.make} {entry.model} · {entry.vehicleTypeName} · {formatCurrency(entry.unitPrice)}
+                  </p>
+                ))}
               </div>
-              {sub.nextScheduledDate && (
+              {sub.nextAppointmentDate && (
                 <div>
                   <p className="text-muted-foreground">Next Appointment</p>
                   <p className="text-sm font-medium flex items-center gap-1">
                     <Calendar className="h-3.5 w-3.5" />
-                    {sub.nextScheduledDate}
+                    {sub.nextAppointmentDate}
                   </p>
                 </div>
               )}
@@ -415,7 +424,7 @@ export default function SubscriptionsClient() {
               )}
             </div>
 
-            {sub.status === "active" && sub.nextScheduledDate && (
+            {sub.status === "active" && sub.nextAppointmentDate && (
               <div className="pt-2">
                 <Link href="/dashboard/appointments">
                   <Button variant="outline" size="sm">

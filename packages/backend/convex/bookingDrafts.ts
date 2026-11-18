@@ -1,3 +1,5 @@
+import { computeNextDate as computeNextSubscriptionDate } from "./lib/subscriptionDates";
+import { getSubscriptionPlanPriceForVehicle } from "./lib/subscriptionPricing";
 import { ConvexError, v } from "convex/values";
 import {
   action,
@@ -184,19 +186,6 @@ type ConvertedDraftResult = {
 
 function normalizeEmail(email: string | null | undefined) {
   return email?.trim().toLowerCase() ?? "";
-}
-
-function computeNextSubscriptionDate(
-  frequency: "monthly" | "biweekly",
-  fromDate: string,
-) {
-  const from = new Date(`${fromDate}T12:00:00`);
-  if (frequency === "monthly") {
-    from.setMonth(from.getMonth() + 1);
-  } else {
-    from.setDate(from.getDate() + 14);
-  }
-  return from.toISOString().split("T")[0];
 }
 
 function createResumeToken() {
@@ -401,43 +390,6 @@ async function getServicesForDraft(
   return services.filter(
     (service): service is Doc<"services"> => service !== null,
   );
-}
-
-async function getSubscriptionPlanPriceForVehicle(
-  ctx: any,
-  plan: Doc<"services">,
-  vehicle: {
-    vehicleTypeId?: Id<"vehicleTypes">;
-    size?: VehicleSize;
-  },
-  fallbackSize: VehicleSize,
-) {
-  if (vehicle.vehicleTypeId) {
-    const row = await ctx.db
-      .query("serviceVehiclePrices")
-      .withIndex("by_service_and_vehicle_type", (q: any) =>
-        q.eq("serviceId", plan._id).eq("vehicleTypeId", vehicle.vehicleTypeId),
-      )
-      .first();
-    if (row?.isAvailable && row.price > 0) {
-      return row.price;
-    }
-    return 0;
-  }
-
-  const size = vehicle.size ?? fallbackSize;
-  const rows = await ctx.db
-    .query("serviceVehiclePrices")
-    .withIndex("by_service", (q: any) => q.eq("serviceId", plan._id))
-    .collect();
-  for (const row of rows) {
-    if (!row.isAvailable || row.price <= 0) continue;
-    const vehicleType = await ctx.db.get(row.vehicleTypeId);
-    if (vehicleType?.legacySize === size) {
-      return row.price;
-    }
-  }
-  return getEffectiveServicePrice(plan, size);
 }
 
 async function buildDraftPricing(args: {
@@ -1356,6 +1308,9 @@ export const markExpiredInternal = internalMutation({
       if (reservation && reservation.status === "pending") {
         const card = await ctx.db.get(reservation.giftCardId);
         if (card) {
+          if (card.refundPendingAmount !== undefined && card.stripePaymentIntentId) {
+            await ctx.scheduler.runAfter(0, internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: card.stripePaymentIntentId, refundAmount: card.refundPendingAmount });
+          }
           await ctx.db.patch(card._id, {
             reservedBalance: Math.max(
               0,
@@ -1515,6 +1470,9 @@ export const convertSuccessfulCheckout = internalMutation({
         if (!card) throw new Error("Gift card not found");
         if (card.balance < reservation.amount) {
           throw new Error("Gift card balance is insufficient");
+        }
+        if (card.refundPendingAmount !== undefined && card.stripePaymentIntentId) {
+          await ctx.scheduler.runAfter(0, internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: card.stripePaymentIntentId, refundAmount: card.refundPendingAmount });
         }
         const balanceBefore = card.balance;
         const balanceAfter =
@@ -1823,6 +1781,15 @@ export const convertSuccessfulCheckout = internalMutation({
         intent.frequency,
         draft.scheduledDate,
       );
+      const clubLines = draft.priceSnapshot.filter(item => item.itemType === "subscription");
+      if (clubLines.length !== enrolledVehicleIds.length) throw new Error("Membership vehicle pricing snapshot is incomplete");
+      const vehiclePricingSnapshot = await Promise.all(enrolledVehicleIds.map(async (vehicleId, index) => {
+        const vehicle = await ctx.db.get(vehicleId);
+        if (!vehicle) throw new Error("Membership vehicle is missing");
+        const line = clubLines[index];
+        const category = line.vehicleTypeId ? await ctx.db.get(line.vehicleTypeId) : null;
+        return { vehicleId, year: vehicle.year, make: vehicle.make.trim(), model: vehicle.model.trim(), vehicleTypeId: line.vehicleTypeId, vehicleTypeName: category?.name ?? "Unclassified", serviceId: intent.planServiceId, unitPrice: line.unitPrice, capturedAt: conversionNow };
+      }));
       convertedSubscriptionId = await ctx.db.insert("subscriptions", {
         userId: user._id,
         serviceIds: includedServiceIds,
@@ -1838,6 +1805,7 @@ export const convertSuccessfulCheckout = internalMutation({
           notes: draft.address.notes,
         },
         totalPrice: intent.totalPerCycle,
+        vehiclePricingSnapshot,
         planServiceId: intent.planServiceId,
         basePricePerCycle: intent.basePricePerCycle,
         petFeePerCycle: intent.petFeePerCycle,
