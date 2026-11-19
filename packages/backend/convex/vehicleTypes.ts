@@ -10,7 +10,10 @@ import {
   normalizeVehicleModel,
   vehicleModelsMatch,
 } from "./lib/vehicleMatching";
-import { parseVehicleSearch } from "./lib/vehicleSearch";
+import {
+  parseVehicleSearch,
+  similarVehicleModelScore,
+} from "./lib/vehicleSearch";
 import { ConvexError, v } from "convex/values";
 import {
   action,
@@ -504,6 +507,7 @@ function dedupeVehicleSuggestions(
     source: "fuelEconomy" | "vpic";
     matchedTrim?: string;
     broadModelChoices?: boolean;
+    similarModelMatch?: boolean;
   }>,
 ) {
   const seen = new Set<string>();
@@ -535,6 +539,7 @@ async function searchFuelEconomyModelsForYear(
     source: "fuelEconomy";
     matchedTrim?: string;
     broadModelChoices?: boolean;
+    similarModelMatch?: boolean;
   }> = [];
   const makes = toMenuItems(
     await fetchJson(
@@ -592,6 +597,27 @@ async function searchFuelEconomyModelsForYear(
       })
       .slice(0, suggestionLimit);
 
+    let similarModelMatch = false;
+    if (!trim && modelQuery && matchingModels.length === 0) {
+      matchingModels = models
+        .map((model) => ({
+          model,
+          score: similarVehicleModelScore(modelQuery, model.text),
+        }))
+        .filter(
+          (
+            entry,
+          ): entry is {
+            model: { text: string; value: string };
+            score: number;
+          } => entry.score !== null,
+        )
+        .sort((a, b) => a.score - b.score)
+        .slice(0, 8)
+        .map((entry) => entry.model);
+      similarModelMatch = matchingModels.length > 0;
+    }
+
     // Every make gets a useful recovery path for an unknown marketing trim.
     // These are explicit model/body choices, never a guessed trim or price.
     let broadModelChoices = false;
@@ -614,6 +640,7 @@ async function searchFuelEconomyModelsForYear(
         make: make.text,
         model: model.text,
         source: "fuelEconomy",
+        ...(similarModelMatch ? { similarModelMatch: true } : {}),
         ...(trim ? { matchedTrim: trim.name } : {}),
         ...(broadModelChoices
           ? { matchedTrim: modelQuery, broadModelChoices: true }
@@ -635,6 +662,7 @@ export const searchModels = action({
       source: v.union(v.literal("fuelEconomy"), v.literal("vpic")),
       matchedTrim: v.optional(v.string()),
       broadModelChoices: v.optional(v.boolean()),
+      similarModelMatch: v.optional(v.boolean()),
     }),
   ),
   args: {
@@ -652,6 +680,7 @@ export const searchModels = action({
       source: "fuelEconomy" | "vpic";
       matchedTrim?: string;
       broadModelChoices?: boolean;
+      similarModelMatch?: boolean;
     }>
   > => {
     const normalizedQuery = args.query.trim().replace(/\s+/g, " ");
@@ -694,6 +723,7 @@ export const searchModels = action({
       source: "fuelEconomy" | "vpic";
       matchedTrim?: string;
       broadModelChoices?: boolean;
+      similarModelMatch?: boolean;
     }> = [];
 
     try {
@@ -738,9 +768,43 @@ export const searchModels = action({
             `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(fallbackMake)}/modelyear/${fallbackYear}?format=json`,
           );
           const seenFamilies = new Set<string>();
-          for (const result of vpic?.Results ?? []) {
-            const make = String(result.Make_Name ?? fallbackMake).trim();
-            const model = String(result.Model_Name ?? "").trim();
+          const candidates = (vpic?.Results ?? [])
+            .map((result: { Make_Name?: string; Model_Name?: string }) => ({
+              make: String(result.Make_Name ?? fallbackMake).trim(),
+              model: String(result.Model_Name ?? "").trim(),
+            }))
+            .filter(
+              (candidate: { make: string; model: string }) =>
+                candidate.make && candidate.model,
+            );
+          const strict = candidates.filter(
+            (candidate: { model: string }) =>
+              !modelQuery ||
+              candidate.model.toLowerCase().includes(modelQuery) ||
+              vehicleModelsMatch(modelQuery, candidate.model),
+          );
+          const nearby =
+            !trim && modelQuery && strict.length === 0
+              ? candidates
+                  .map((candidate: { make: string; model: string }) => ({
+                    ...candidate,
+                    score: similarVehicleModelScore(
+                      modelQuery,
+                      candidate.model,
+                    ),
+                  }))
+                  .filter(
+                    (candidate: { score: number | null }) =>
+                      candidate.score !== null,
+                  )
+                  .sort(
+                    (a: { score: number }, b: { score: number }) =>
+                      a.score - b.score,
+                  )
+              : [];
+          const useNearby = nearby.length > 0;
+          for (const result of useNearby ? nearby : candidates) {
+            const { make, model } = result;
             if (!make || !model) continue;
             if (trim) {
               const family = trimModelFamily(model, trim.families);
@@ -750,6 +814,7 @@ export const searchModels = action({
             }
             if (
               modelQuery &&
+              !useNearby &&
               !model.toLowerCase().includes(modelQuery) &&
               !vehicleModelsMatch(modelQuery, model)
             )
@@ -759,6 +824,7 @@ export const searchModels = action({
               make,
               model,
               source: "vpic",
+              ...(useNearby ? { similarModelMatch: true } : {}),
               ...(trim ? { matchedTrim: trim.name } : {}),
             });
           }
@@ -771,7 +837,13 @@ export const searchModels = action({
     const direct = suggestions.filter(
       (suggestion) => !suggestion.broadModelChoices,
     );
-    return dedupeVehicleSuggestions(direct.length ? direct : suggestions);
+    return dedupeVehicleSuggestions(
+      (direct.length ? direct : suggestions).sort(
+        (a, b) =>
+          Number(Boolean(a.similarModelMatch)) -
+          Number(Boolean(b.similarModelMatch)),
+      ),
+    );
   },
 });
 

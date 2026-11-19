@@ -2,6 +2,11 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v0.1.7] - 2026-11-19
+### Fixed
+- Offer provider-backed similar model spellings in web and mobile vehicle lookup, preserving numeric identifiers and requiring the customer to choose a model before classification.
+- Resolve the owner-confirmed 2014 Lexus GS 350 record as Car with an audited identity correction.
+
 ## [v0.1.6] - 2026-11-19
 ### Fixed
 - Bring mobile vehicle lookup, onboarding, garage, and booking to the same trim search and category requirements as web; discard stale responses and preserve customer category selections.

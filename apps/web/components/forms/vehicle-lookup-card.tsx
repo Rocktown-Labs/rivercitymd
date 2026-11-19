@@ -68,6 +68,7 @@ type Suggestion = {
   label: string;
   source: "fuelEconomy" | "vpic";
   matchedTrim?: string;
+      similarModelMatch?: boolean;
 };
 
 type VehicleLookupCardProps = {
@@ -611,6 +612,11 @@ export function VehicleLookupCard({
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Searching vehicles...
                     </div>
+                  )}
+                  {suggestions.some((suggestion) => suggestion.similarModelMatch) && (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      Similar model names found. Choose the vehicle that matches yours.
+                    </p>
                   )}
                   {suggestions[0]?.matchedTrim && (
                     <p className="px-3 py-2 text-xs text-muted-foreground">

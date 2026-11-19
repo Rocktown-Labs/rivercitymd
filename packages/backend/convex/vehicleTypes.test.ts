@@ -566,9 +566,7 @@ test("conflicting body categories require review instead of choosing the first t
           menuItem: { value: u.includes("Chassis") ? "2" : "1" },
         });
       return Response.json({
-        VClass: u.endsWith("/2")
-          ? "Special Purpose Vehicle 2WD"
-          : "Van",
+        VClass: u.endsWith("/2") ? "Special Purpose Vehicle 2WD" : "Van",
       });
     }),
   );
@@ -833,4 +831,74 @@ test("manufacturer evidence resolves a GLB SUV despite differing EPA wagon/SUV c
     needsAdminReview: false,
   });
   expect(result.rawCategory).toContain("Manufacturer evidence:");
+});
+
+test("misspelled models rank actual nearby models instead of the first broad choices, without auto-classifying the typo", async () => {
+  const t = convexTest(schema, modules);
+  const names = [
+    "CT 200h",
+    "ES 300h",
+    "ES 350",
+    "GX 460",
+    "IS 250",
+    "IS 350",
+    "LS 460",
+    "LX 570",
+    "GS 350",
+    "GS 350 AWD",
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: "Lexus", value: "Lexus" } });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: names.map((text) => ({ text, value: text })),
+        });
+      if (u.includes("/menu/options")) return Response.json({ menuItem: [] });
+      return Response.json({ Results: [] });
+    }),
+  );
+  const suggestions = await t.action(api.vehicleTypes.searchModels, {
+    query: "2014 Lexus G350",
+  });
+  expect(suggestions.map((s) => s.model)).toEqual(["GS 350", "GS 350 AWD"]);
+  expect(
+    suggestions.every(
+      (s) => s.similarModelMatch && s.year === 2014 && s.make === "Lexus",
+    ),
+  ).toBe(true);
+  const original = await t.action(api.vehicleTypes.classify, {
+    year: 2014,
+    make: "Lexus",
+    model: "G350",
+  });
+  expect(original.vehicleTypeId).toBeUndefined();
+  expect(original.needsAdminReview).toBe(true);
+});
+
+test("vPIC supplies nearby model suggestions when FuelEconomy has no matching model year", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (new URL(u).hostname === "www.fueleconomy.gov")
+        return Response.json({ menuItem: [] });
+      return Response.json({
+        Results: [
+          { Make_Name: "Lexus", Model_Name: "GS 350" },
+          { Make_Name: "Lexus", Model_Name: "IS 350" },
+          { Make_Name: "Lexus", Model_Name: "GS 450" },
+        ],
+      });
+    }),
+  );
+  const suggestions = await t.action(api.vehicleTypes.searchModels, {
+    query: "2014 Lexus G350",
+  });
+  expect(suggestions.map((s) => s.model)).toEqual(["GS 350"]);
+  expect(suggestions[0].similarModelMatch).toBe(true);
 });

@@ -49,3 +49,7 @@ The native lookup uses the same search/classify actions as web. It now displays 
 ## Sign-in follow-up
 
 The confirmed production hosting-alias failure is addressed by redirecting to the Clerk-authorized canonical domain. Canonical OAuth initiation reached Google in Chromium and iPhone-profile WebKit. Janet’s original account-specific loop cannot be reproduced without her login; completion remains an owner/customer check if it recurs.
+
+## Owner confirmation update — 2026-11-19
+
+The owner confirmed the 2014 Lexus G350 is **GS 350**. The guarded production helper corrected its model and Car category, preserved the original identity in the audit trail, and cleared its review flag. Six current vehicles remain unresolved. #213 adds provider-backed nearby spelling suggestions (such as G350 → GS 350) to web and native search. Suggestions do not change the strict classification rules or save a guessed identity.
