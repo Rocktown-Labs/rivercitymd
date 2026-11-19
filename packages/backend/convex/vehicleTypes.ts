@@ -1,5 +1,12 @@
+import { parseVehicleSearch } from "./lib/vehicleSearch";
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import {
+  action,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./auth";
@@ -18,7 +25,14 @@ const DEFAULT_VEHICLE_TYPES = [
     slug: "car",
     legacySize: "medium" as VehicleSize,
     displayOrder: 10,
-    apiAliases: ["car", "compact", "subcompact", "midsize", "large cars", "sedan"],
+    apiAliases: [
+      "car",
+      "compact",
+      "subcompact",
+      "midsize",
+      "large cars",
+      "sedan",
+    ],
   },
   {
     name: "Truck",
@@ -94,9 +108,7 @@ function isHeavyTruckVehicle(make: string, model: string) {
   const normalizedMake = make.trim().toLowerCase();
   const normalizedModel = model.trim().toLowerCase();
   if (
-    LIGHT_TRUCK_MODELS.some((candidate) =>
-      normalizedModel.includes(candidate),
-    )
+    LIGHT_TRUCK_MODELS.some((candidate) => normalizedModel.includes(candidate))
   ) {
     return false;
   }
@@ -178,7 +190,10 @@ export const list = query({
     const vehicleTypes = await ctx.db.query("vehicleTypes").collect();
     return vehicleTypes
       .filter((vehicleType) => args.includeInactive || vehicleType.isActive)
-      .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name));
+      .sort(
+        (a, b) =>
+          a.displayOrder - b.displayOrder || a.name.localeCompare(b.name),
+      );
   },
 });
 
@@ -199,7 +214,8 @@ export const getDefaultByLegacySizeInternal = internalQuery({
     return (
       types
         .filter((vehicleType) => vehicleType.isActive)
-        .find((vehicleType) => vehicleType.legacySize === args.legacySize) ?? null
+        .find((vehicleType) => vehicleType.legacySize === args.legacySize) ??
+      null
     );
   },
 });
@@ -226,7 +242,10 @@ export const create = mutation({
       .first();
     if (existing) {
       if (!existing.isActive) {
-        await ctx.db.patch(existing._id, { isActive: true, updatedAt: Date.now() });
+        await ctx.db.patch(existing._id, {
+          isActive: true,
+          updatedAt: Date.now(),
+        });
       }
       return existing._id;
     }
@@ -239,7 +258,10 @@ export const create = mutation({
       legacySize: args.legacySize ?? inferLegacySize(name),
       isActive: true,
       displayOrder:
-        currentTypes.reduce((max, vehicleType) => Math.max(max, vehicleType.displayOrder), 0) + 10,
+        currentTypes.reduce(
+          (max, vehicleType) => Math.max(max, vehicleType.displayOrder),
+          0,
+        ) + 10,
       apiAliases: [name.toLowerCase()],
       createdAt: now,
       updatedAt: now,
@@ -338,7 +360,10 @@ function mapCategoryToSlug(value: string | undefined): {
 function normalizeModelName(value: string | undefined): string {
   return (value ?? "")
     .toLowerCase()
-    .replace(/\b(all[-\s]?wheel|four[-\s]?wheel|front[-\s]?wheel|rear[-\s]?wheel)\s+drive\b/g, " ")
+    .replace(
+      /\b(all[-\s]?wheel|four[-\s]?wheel|front[-\s]?wheel|rear[-\s]?wheel)\s+drive\b/g,
+      " ",
+    )
     .replace(/\b(awd|4wd|2wd|fwd|rwd|4x4|2x4)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .trim()
@@ -354,8 +379,7 @@ function isModelMatch(inputModel: string, candidateModel: string): boolean {
 
 function getGeminiApiKey(): string | undefined {
   return (
-    process.env.GEMINI_API_KEY ||
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY
+    process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY
   )?.trim();
 }
 
@@ -371,7 +395,8 @@ async function classifyWithGeminiSearch(args: {
   const apiKey = getGeminiApiKey();
   if (!apiKey) return null;
 
-  const model = process.env.GEMINI_VEHICLE_CLASSIFIER_MODEL || "gemini-2.5-flash";
+  const model =
+    process.env.GEMINI_VEHICLE_CLASSIFIER_MODEL || "gemini-2.5-flash";
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     {
@@ -438,10 +463,17 @@ async function classifyWithGeminiSearch(args: {
       : mapped.confidence;
 
   return {
-    slug:
-      ["car", "truck", "suv", "van", "motorcycle", "side-by-side", "semi"].includes(parsed?.slug)
-        ? parsed.slug
-        : mapped.slug,
+    slug: [
+      "car",
+      "truck",
+      "suv",
+      "van",
+      "motorcycle",
+      "side-by-side",
+      "semi",
+    ].includes(parsed?.slug)
+      ? parsed.slug
+      : mapped.slug,
     confidence,
     rawCategory: parsed?.rawCategory
       ? `Gemini Search: ${String(parsed.rawCategory)}`
@@ -481,7 +513,8 @@ function dedupeVehicleSuggestions(
   const seen = new Set<string>();
   return suggestions
     .filter((suggestion) => {
-      const key = `${suggestion.year}|${suggestion.make}|${suggestion.model}`.toLowerCase();
+      const key =
+        `${suggestion.year}|${suggestion.make}|${suggestion.model}`.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -579,8 +612,9 @@ export const searchModels = action({
       return [];
     }
 
-    const [makeQuery = "", ...modelParts] = vehicleQuery.toLowerCase().split(" ");
-    const modelQuery = modelParts.join(" ");
+    const parsed = parseVehicleSearch(normalizedQuery);
+    const makeQuery = parsed.make.toLowerCase();
+    const modelQuery = parsed.model.toLowerCase();
 
     const suggestions: Array<{
       year: number;
@@ -610,25 +644,33 @@ export const searchModels = action({
       // vPIC is used as a fallback below.
     }
 
-    if (year && suggestions.length < 3 && makeQuery.length >= 2) {
-      try {
-        const vpic = await fetchJson(
-          `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(makeQuery)}/modelyear/${year}?format=json`,
-        );
-        for (const result of vpic?.Results ?? []) {
-          const make = String(result.Make_Name ?? makeQuery).trim();
-          const model = String(result.Model_Name ?? "").trim();
-          if (!make || !model) continue;
-          if (modelQuery && !model.toLowerCase().includes(modelQuery)) continue;
-          suggestions.push({
-            year,
-            make,
-            model,
-            source: "vpic",
-          });
+    if (suggestions.length < 3 && makeQuery.length >= 2) {
+      // Without a year, offer recent model-year candidates, never silently
+      // assign a year to the customer's manually entered vehicle.
+      const fallbackYears = year
+        ? [year]
+        : [new Date().getFullYear(), new Date().getFullYear() - 1];
+      for (const fallbackYear of fallbackYears) {
+        try {
+          const vpic = await fetchJson(
+            `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(makeQuery)}/modelyear/${fallbackYear}?format=json`,
+          );
+          for (const result of vpic?.Results ?? []) {
+            const make = String(result.Make_Name ?? makeQuery).trim();
+            const model = String(result.Model_Name ?? "").trim();
+            if (!make || !model) continue;
+            if (modelQuery && !model.toLowerCase().includes(modelQuery))
+              continue;
+            suggestions.push({
+              year: fallbackYear,
+              make,
+              model,
+              source: "vpic",
+            });
+          }
+        } catch {
+          // Empty results are fine for a suggestion endpoint.
         }
-      } catch {
-        // Empty results are fine for a suggestion endpoint.
       }
     }
 
@@ -642,7 +684,10 @@ export const classify = action({
     make: v.string(),
     model: v.string(),
   },
-  handler: async (ctx, args): Promise<{
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
     vehicleTypeId?: Id<"vehicleTypes">;
     vehicleTypeName?: string;
     legacySize: VehicleSize;
@@ -677,8 +722,31 @@ export const classify = action({
       };
     }
 
-    const make = encodeURIComponent(args.make.trim());
-    const model = encodeURIComponent(args.model.trim());
+    let canonicalMake = args.make.trim();
+    let canonicalModel = args.model.trim();
+    try {
+      const makes = toMenuItems(
+        await fetchJson(
+          `https://www.fueleconomy.gov/ws/rest/vehicle/menu/make?year=${args.year}`,
+        ),
+      );
+      canonicalMake =
+        makes.find((m) => m.text.toLowerCase() === canonicalMake.toLowerCase())
+          ?.value ?? canonicalMake;
+      const models = toMenuItems(
+        await fetchJson(
+          `https://www.fueleconomy.gov/ws/rest/vehicle/menu/model?year=${args.year}&make=${encodeURIComponent(canonicalMake)}`,
+        ),
+      );
+      canonicalModel =
+        models.find(
+          (m) => m.text.toLowerCase() === canonicalModel.toLowerCase(),
+        )?.value ?? canonicalModel;
+    } catch {
+      /* Other providers and manual category selection remain available. */
+    }
+    const make = encodeURIComponent(canonicalMake);
+    const model = encodeURIComponent(canonicalModel);
     let mapped: {
       slug: string;
       confidence: "high" | "medium" | "low";
@@ -713,7 +781,8 @@ export const classify = action({
         const match = (vpic?.Results ?? []).find((result: any) =>
           isModelMatch(args.model, String(result.Model_Name ?? "")),
         );
-        rawCategory = match?.VehicleTypeName ?? match?.Model_Name ?? rawCategory;
+        rawCategory =
+          match?.VehicleTypeName ?? match?.Model_Name ?? rawCategory;
         const vpicMapped = mapCategoryToSlug(rawCategory);
         if (vpicMapped.confidence !== "low") {
           mapped = vpicMapped;
@@ -744,12 +813,14 @@ export const classify = action({
       }
     }
 
-    const vehicleType = await ctx.runQuery(internal.vehicleTypes.getBySlugInternal, {
-      slug: mapped.slug,
-    });
+    const vehicleType = await ctx.runQuery(
+      internal.vehicleTypes.getBySlugInternal,
+      {
+        slug: mapped.slug,
+      },
+    );
     return {
-      vehicleTypeId:
-        mapped.confidence === "low" ? undefined : vehicleType?._id,
+      vehicleTypeId: mapped.confidence === "low" ? undefined : vehicleType?._id,
       vehicleTypeName:
         mapped.confidence === "low" ? undefined : vehicleType?.name,
       legacySize: vehicleType?.legacySize ?? "medium",

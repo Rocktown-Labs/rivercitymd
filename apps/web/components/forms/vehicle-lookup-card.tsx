@@ -1,10 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useAction, useMutation } from "convex/react";
-import { Camera, Check, Loader2, Search, Upload, X, ChevronDown, ChevronUp } from "lucide-react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { useAction, useMutation, useQuery } from "convex/react";
+import {
+  Camera,
+  Check,
+  Loader2,
+  Search,
+  Upload,
+  X,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { parseVehicleSearch as parseVehicleQuery } from "@rivercitymd/backend/convex/lib/vehicleSearch";
 import { api } from "@rivercitymd/backend/convex/_generated/api";
 import type { Id } from "@rivercitymd/backend/convex/_generated/dataModel";
 import { Badge } from "@/components/ui/badge";
@@ -74,11 +84,6 @@ type VehicleLookupCardProps = {
 
 const MAX_PHOTOS = 6;
 const MAX_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
-const SIZE_LABELS: Record<VehicleSize, string> = {
-  small: "Small / motorcycle / ATV",
-  medium: "Car / standard",
-  large: "SUV / truck / van / RV",
-};
 const ALLOWED_PHOTO_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -96,18 +101,6 @@ const ALLOWED_PHOTO_EXTENSIONS = new Set([
   ".heic",
   ".heif",
 ]);
-
-function parseVehicleQuery(query: string) {
-  const normalized = query.trim().replace(/\s+/g, " ");
-  const yearMatch = normalized.match(/\b(19|20)\d{2}\b/);
-  const withoutYear = normalized.replace(yearMatch?.[0] ?? "", "").trim();
-  const [make = "", ...modelParts] = withoutYear.split(" ");
-  return {
-    year: yearMatch?.[0] ?? "",
-    make,
-    model: modelParts.join(" "),
-  };
-}
 
 function isValidYear(year: string) {
   return /^\d{4}$/.test(year);
@@ -201,7 +194,8 @@ async function relayPhotoToSignedUrl(args: {
   });
 
   if (!response.ok) {
-    let message = "Photo upload failed. Please try again or continue without photos.";
+    let message =
+      "Photo upload failed. Please try again or continue without photos.";
     try {
       const result = await response.clone().json();
       if (typeof result?.error === "string" && result.error.trim()) {
@@ -239,13 +233,18 @@ export function VehicleLookupCard({
   isExpanded,
   onToggleExpanded,
 }: VehicleLookupCardProps) {
+  const vehicleTypes = useQuery(api.vehicleTypes.list, {});
+  const selectionVersion = useRef(0);
+  const searchVersion = useRef(0);
   const searchModels = useAction(api.vehicleTypes.searchModels);
   const classifyVehicle = useAction(api.vehicleTypes.classify);
   const createBeforePhotoUploadUrl = useMutation(
     api.bookingDrafts.createBeforePhotoUploadUrl,
   );
 
-  const initialQuery = [value.year, value.make, value.model].filter(Boolean).join(" ");
+  const initialQuery = [value.year, value.make, value.model]
+    .filter(Boolean)
+    .join(" ");
   const [query, setQuery] = useState(initialQuery);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -257,7 +256,7 @@ export function VehicleLookupCard({
     year: value.year ?? "",
     make: value.make ?? "",
     model: value.model ?? "",
-    size: (value.size ?? "medium") as VehicleSize,
+    vehicleTypeId: value.vehicleTypeId ?? "",
   });
 
   useEffect(() => {
@@ -270,10 +269,10 @@ export function VehicleLookupCard({
   }, [query, value.make, value.model, value.year]);
 
   useEffect(() => {
+    const version = ++searchVersion.current;
+    let cancelled = false;
     const parsed = parseVehicleQuery(query);
-    const canSearch =
-      parsed.make &&
-      query.trim().length >= 3;
+    const canSearch = parsed.make && query.trim().length >= 3;
     if (!canSearch) {
       setSuggestions([]);
       setIsSearching(false);
@@ -286,15 +285,20 @@ export function VehicleLookupCard({
         const results = await searchModels({
           query,
         });
-        setSuggestions(results);
+        if (!cancelled && version === searchVersion.current)
+          setSuggestions(results);
       } catch {
-        setSuggestions([]);
+        if (!cancelled && version === searchVersion.current) setSuggestions([]);
       } finally {
-        setIsSearching(false);
+        if (!cancelled && version === searchVersion.current)
+          setIsSearching(false);
       }
     }, 250);
 
-    return () => window.clearTimeout(timeout);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
   }, [query, searchModels]);
 
   const detectedLabel = useMemo(() => {
@@ -302,14 +306,26 @@ export function VehicleLookupCard({
     if (value.vehicleTypeName) return `Detected: ${value.vehicleTypeName}`;
     if (value.classification?.needsAdminReview) return "Needs admin review";
     return "Select a vehicle to detect pricing type";
-  }, [isClassifying, value.classification?.needsAdminReview, value.vehicleTypeName]);
+  }, [
+    isClassifying,
+    value.classification?.needsAdminReview,
+    value.vehicleTypeName,
+  ]);
 
   const updateValue = (patch: Partial<VehicleLookupValue>) => {
     onChange({ ...value, ...patch });
   };
 
   const classifySelection = async (nextValue: VehicleLookupValue) => {
+    const version = ++selectionVersion.current;
     onChange(nextValue);
+    if (
+      nextValue.classification?.source === "manual" &&
+      nextValue.vehicleTypeId
+    ) {
+      setIsClassifying(false);
+      return;
+    }
 
     if (!isValidYear(nextValue.year) || !nextValue.make || !nextValue.model) {
       return;
@@ -322,13 +338,16 @@ export function VehicleLookupCard({
         make: nextValue.make,
         model: nextValue.model,
       });
+      if (version !== selectionVersion.current) return;
       onChange({
         ...nextValue,
         size:
           classification.needsAdminReview || !classification.vehicleTypeId
-            ? nextValue.size ?? classification.legacySize
+            ? (nextValue.size ?? classification.legacySize)
             : classification.legacySize,
-        vehicleTypeId: classification.vehicleTypeId as Id<"vehicleTypes"> | undefined,
+        vehicleTypeId: classification.vehicleTypeId as
+          | Id<"vehicleTypes">
+          | undefined,
         vehicleTypeName: classification.vehicleTypeName,
         classification: {
           source: classification.source,
@@ -338,6 +357,7 @@ export function VehicleLookupCard({
         },
       });
     } catch {
+      if (version !== selectionVersion.current) return;
       onChange({
         ...nextValue,
         size: nextValue.size ?? "medium",
@@ -348,7 +368,7 @@ export function VehicleLookupCard({
         },
       });
     } finally {
-      setIsClassifying(false);
+      if (version === selectionVersion.current) setIsClassifying(false);
     }
   };
 
@@ -372,19 +392,26 @@ export function VehicleLookupCard({
       toast.error("Enter a 4-digit year, make, and model.");
       return;
     }
+    const selectedType = vehicleTypes?.find(
+      (type) => type._id === manualVehicle.vehicleTypeId,
+    );
+    if (!selectedType) {
+      toast.error("Select a vehicle category.");
+      return;
+    }
     const nextValue = {
       ...value,
       year,
       make,
       model,
-      size: manualVehicle.size,
-      vehicleTypeId: undefined,
-      vehicleTypeName: undefined,
+      size: selectedType.legacySize,
+      vehicleTypeId: selectedType._id,
+      vehicleTypeName: selectedType.name,
       classification: {
         source: "manual" as const,
-        confidence: "low" as const,
+        confidence: "high" as const,
         rawCategory: "Manual customer entry",
-        needsAdminReview: true,
+        needsAdminReview: false,
       },
     };
     setQuery([year, make, model].join(" "));
@@ -414,13 +441,17 @@ export function VehicleLookupCard({
     const remainingSlots = Math.max(0, MAX_PHOTOS - existingPhotos.length);
     const selectedFiles = Array.from(files).slice(0, remainingSlots);
     if (selectedFiles.length === 0) {
-      toast.error(`You can upload up to ${MAX_PHOTOS} before photos per vehicle.`);
+      toast.error(
+        `You can upload up to ${MAX_PHOTOS} before photos per vehicle.`,
+      );
       return;
     }
 
     const invalidFile = selectedFiles.find((file) => !isAllowedPhoto(file));
     if (invalidFile) {
-      toast.error("Before photos must be JPG, PNG, WEBP, GIF, HEIC, or HEIF under 10MB.");
+      toast.error(
+        "Before photos must be JPG, PNG, WEBP, GIF, HEIC, or HEIF under 10MB.",
+      );
       return;
     }
 
@@ -451,7 +482,9 @@ export function VehicleLookupCard({
           : "Before photos uploaded",
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Photo upload failed");
+      toast.error(
+        error instanceof Error ? error.message : "Photo upload failed",
+      );
     } finally {
       setIsUploading(false);
     }
@@ -459,7 +492,9 @@ export function VehicleLookupCard({
 
   const removePhoto = (key: string) => {
     updateValue({
-      beforePhotos: (value.beforePhotos ?? []).filter((photo) => photo.key !== key),
+      beforePhotos: (value.beforePhotos ?? []).filter(
+        (photo) => photo.key !== key,
+      ),
     });
   };
 
@@ -468,30 +503,40 @@ export function VehicleLookupCard({
 
   return (
     <div className="relative rounded-md border bg-background p-4">
-      <div 
+      <div
         className={`flex items-start justify-between gap-3 ${isAccordion ? "cursor-pointer select-none" : ""}`}
         onClick={isAccordion ? onToggleExpanded : undefined}
       >
         <div className="flex items-center gap-3">
           {isAccordion && (
             <div className="text-muted-foreground mt-0.5">
-              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {isExpanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
             </div>
           )}
           <div>
             <h4 className="text-sm font-medium">
               {title}
-              {(value.year || value.make || value.model) ? (
+              {value.year || value.make || value.model ? (
                 <span className="ml-2 text-foreground font-semibold">
-                  {[value.year, value.make, value.model].filter(Boolean).join(" ")}
+                  {[value.year, value.make, value.model]
+                    .filter(Boolean)
+                    .join(" ")}
                 </span>
               ) : (
-                <span className="ml-2 text-muted-foreground italic">(Details pending)</span>
+                <span className="ml-2 text-muted-foreground italic">
+                  (Details pending)
+                </span>
               )}
             </h4>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant={value.vehicleTypeName ? "default" : "secondary"}>
-                {isClassifying && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                {isClassifying && (
+                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                )}
                 {detectedLabel}
               </Badge>
               {value.classification?.rawCategory && (
@@ -522,40 +567,43 @@ export function VehicleLookupCard({
       {showContent && (
         <div className="space-y-4 pt-4 mt-4 border-t border-border/40">
           <div className="relative space-y-2">
-              <Label htmlFor={`${title}-vehicle`}>Vehicle</Label>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id={`${title}-vehicle`}
-                  className="pl-9"
-                  placeholder="Search Kia Sorento or 2020 Kia Sorento"
-                  value={query}
-                  onBlur={() => {
-                    if (!value.make || !value.model) {
-                      acceptTypedVehicle();
-                    }
-                    setIsMenuOpen(false);
-                  }}
-                  onFocus={() => setIsMenuOpen(true)}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    setIsMenuOpen(true);
-                    updateValue({
-                      year: "",
-                      make: "",
-                      model: "",
-                      vehicleTypeId: undefined,
-                      vehicleTypeName: undefined,
-                      classification: undefined,
-                    });
-                  }}
-                />
-              </div>
+            <Label htmlFor={`${title}-vehicle`}>Vehicle</Label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id={`${title}-vehicle`}
+                className="pl-9"
+                placeholder="Search Kia Sorento or 2020 Kia Sorento"
+                value={query}
+                onBlur={() => {
+                  if (!value.make || !value.model) {
+                    acceptTypedVehicle();
+                  }
+                  setIsMenuOpen(false);
+                }}
+                onFocus={() => setIsMenuOpen(true)}
+                onChange={(event) => {
+                  selectionVersion.current++;
+                  searchVersion.current++;
+                  setIsClassifying(false);
+                  setQuery(event.target.value);
+                  setIsMenuOpen(true);
+                  updateValue({
+                    year: "",
+                    make: "",
+                    model: "",
+                    vehicleTypeId: undefined,
+                    vehicleTypeName: undefined,
+                    classification: undefined,
+                  });
+                }}
+              />
+            </div>
 
-              {isMenuOpen &&
-                (suggestions.length > 0 ||
-                  isSearching ||
-                  query.trim().length >= 3) && (
+            {isMenuOpen &&
+              (suggestions.length > 0 ||
+                isSearching ||
+                query.trim().length >= 3) && (
                 <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-md border bg-background shadow-lg">
                   {isSearching && (
                     <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
@@ -576,19 +624,20 @@ export function VehicleLookupCard({
                       <span>{suggestion.label}</span>
                     </button>
                   ))}
-                  {parseVehicleQuery(query).year && parseVehicleQuery(query).model && (
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 border-t px-3 py-2 text-left text-sm hover:bg-muted"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        acceptTypedVehicle();
-                      }}
-                    >
-                      <Check className="h-4 w-4" />
-                      Use &quot;{query.trim()}&quot;
-                    </button>
-                  )}
+                  {parseVehicleQuery(query).year &&
+                    parseVehicleQuery(query).model && (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-2 border-t px-3 py-2 text-left text-sm hover:bg-muted"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          acceptTypedVehicle();
+                        }}
+                      >
+                        <Check className="h-4 w-4" />
+                        Use &quot;{query.trim()}&quot;
+                      </button>
+                    )}
                   {!isSearching && suggestions.length === 0 && (
                     <button
                       type="button"
@@ -663,15 +712,13 @@ export function VehicleLookupCard({
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
                 <div className="space-y-1">
-                  <Label htmlFor={`${title}-manual-size`}>
-                    Pricing type
-                  </Label>
+                  <Label htmlFor={`${title}-manual-size`}>Pricing type</Label>
                   <Select
-                    value={manualVehicle.size}
-                    onValueChange={(size) =>
+                    value={manualVehicle.vehicleTypeId}
+                    onValueChange={(vehicleTypeId) =>
                       setManualVehicle((current) => ({
                         ...current,
-                        size: size as VehicleSize,
+                        vehicleTypeId,
                       }))
                     }
                   >
@@ -679,9 +726,9 @@ export function VehicleLookupCard({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(["small", "medium", "large"] as VehicleSize[]).map((size) => (
-                        <SelectItem key={size} value={size}>
-                          {SIZE_LABELS[size]}
+                      {vehicleTypes?.map((type) => (
+                        <SelectItem key={type._id} value={type._id}>
+                          {type.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -703,6 +750,42 @@ export function VehicleLookupCard({
             </div>
           )}
 
+          {value.make && value.model && (
+            <div className="space-y-2">
+              <Label>Vehicle category</Label>
+              <Select
+                value={value.vehicleTypeId ?? ""}
+                onValueChange={(id) => {
+                  const type = vehicleTypes?.find((t) => t._id === id);
+                  if (!type) return;
+                  selectionVersion.current++;
+                  setIsClassifying(false);
+                  updateValue({
+                    vehicleTypeId: type._id,
+                    vehicleTypeName: type.name,
+                    size: type.legacySize,
+                    classification: {
+                      source: "manual",
+                      confidence: "high",
+                      needsAdminReview: false,
+                    },
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose Car, SUV, Truck, etc." />
+                </SelectTrigger>
+                <SelectContent>
+                  {vehicleTypes?.map((type) => (
+                    <SelectItem key={type._id} value={type._id}>
+                      {type.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           {(showColor || showLicensePlate) && (
             <div className="grid gap-4 sm:grid-cols-2">
               {showColor && (
@@ -712,18 +795,24 @@ export function VehicleLookupCard({
                     id={`${title}-color`}
                     placeholder="Silver"
                     value={value.color ?? ""}
-                    onChange={(event) => updateValue({ color: event.target.value })}
+                    onChange={(event) =>
+                      updateValue({ color: event.target.value })
+                    }
                   />
                 </div>
               )}
 
               {showLicensePlate && (
                 <div className="space-y-2">
-                  <Label htmlFor={`${title}-plate`}>License Plate (Optional)</Label>
+                  <Label htmlFor={`${title}-plate`}>
+                    License Plate (Optional)
+                  </Label>
                   <Input
                     id={`${title}-plate`}
                     value={value.licensePlate ?? ""}
-                    onChange={(event) => updateValue({ licensePlate: event.target.value })}
+                    onChange={(event) =>
+                      updateValue({ licensePlate: event.target.value })
+                    }
                   />
                 </div>
               )}
@@ -733,7 +822,9 @@ export function VehicleLookupCard({
           {showPetToggle && (
             <div className="rounded-md border bg-muted/10 p-3">
               <div className="mb-3 space-y-1">
-                <Label className="mb-0">Anything we should plan extra time for?</Label>
+                <Label className="mb-0">
+                  Anything we should plan extra time for?
+                </Label>
                 <p className="text-xs text-muted-foreground">
                   These answers help us recommend the right package level.
                 </p>
@@ -759,7 +850,9 @@ export function VehicleLookupCard({
                   type="button"
                   variant={value.hasHeavySoil ? "default" : "outline"}
                   className="h-auto justify-start gap-2 px-3 py-2 text-left"
-                  onClick={() => updateValue({ hasHeavySoil: !value.hasHeavySoil })}
+                  onClick={() =>
+                    updateValue({ hasHeavySoil: !value.hasHeavySoil })
+                  }
                 >
                   {value.hasHeavySoil && <Check className="h-4 w-4 shrink-0" />}
                   <span>
@@ -786,7 +879,10 @@ export function VehicleLookupCard({
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={isUploading || (value.beforePhotos ?? []).length >= MAX_PHOTOS}
+                  disabled={
+                    isUploading ||
+                    (value.beforePhotos ?? []).length >= MAX_PHOTOS
+                  }
                   asChild
                 >
                   <label className="cursor-pointer">
@@ -814,8 +910,14 @@ export function VehicleLookupCard({
               {(value.beforePhotos ?? []).length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {(value.beforePhotos ?? []).map((photo) => (
-                    <Badge key={photo.key} variant="secondary" className="gap-2">
-                      <span className="max-w-[150px] truncate">{photo.fileName}</span>
+                    <Badge
+                      key={photo.key}
+                      variant="secondary"
+                      className="gap-2"
+                    >
+                      <span className="max-w-[150px] truncate">
+                        {photo.fileName}
+                      </span>
                       <button
                         type="button"
                         className="rounded-full hover:text-destructive"

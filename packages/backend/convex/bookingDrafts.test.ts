@@ -398,5 +398,9 @@ describe("bookingDrafts pricing validation", () => {
       ),
     ).toBe(false);
     expect(stored?.duration).toBe(165);
+    const converted = await t.mutation(internal.bookingDrafts.convertSuccessfulCheckout, { draftId: draft.draftId });
+    const membership = await t.run(ctx => ctx.db.query("subscriptions").first());
+    expect(converted).toBeTruthy();
+    expect(membership?.vehiclePricingSnapshot?.[0]).toMatchObject({ year: 2022, make: "Toyota", model: "Highlander", unitPrice: 145, serviceId: planServiceId });
   });
 });

@@ -31,6 +31,9 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
   // Handle sign-in/sign-up routes first so authenticated users are redirected
   // instead of getting stuck on an auth page.
   if (isAuthRoute) {
+    // Clerk owns OAuth callback completion; redirecting it mid-handshake can
+    // restart Google sign-in before the session has finished synchronizing.
+    if (url.pathname.includes("/sso-callback")) return NextResponse.next();
     if (!isAuthenticated) {
       return NextResponse.next();
     }
@@ -226,8 +229,7 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
     const token = await getToken({ template: "convex" });
 
     if (!token) {
-      const signInUrl = new URL("/sign-in", req.url);
-      return NextResponse.redirect(signInUrl);
+      return NextResponse.redirect(new URL("/onboarding", req.url));
     }
 
     const userRole = await fetchQuery(
@@ -289,8 +291,7 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
     return NextResponse.redirect(onboardingUrl);
   } catch (error) {
     console.error("Error checking user role:", error);
-    const signInUrl = new URL("/sign-in", req.url);
-    return NextResponse.redirect(signInUrl);
+    return NextResponse.redirect(new URL("/onboarding", req.url));
   }
 
   return NextResponse.next();

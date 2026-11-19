@@ -50,10 +50,7 @@ const paymentMethodValidator = v.union(
   v.literal("cash"),
   v.literal("comp"),
 );
-const orderTypeValidator = v.union(
-  v.literal("booking"),
-  v.literal("invoice"),
-);
+const orderTypeValidator = v.union(v.literal("booking"), v.literal("invoice"));
 const giftCardAddressValidator = v.object({
   line1: v.string(),
   line2: v.optional(v.string()),
@@ -102,7 +99,10 @@ function validatePurchaseInput(args: {
       throw new ConvexError({ message: "Enter a valid recipient email." });
     }
   }
-  if (args.purchaserEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.purchaserEmail.trim())) {
+  if (
+    args.purchaserEmail &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.purchaserEmail.trim())
+  ) {
     throw new ConvexError({ message: "Enter a valid purchaser email." });
   }
   if (args.pin && !isValidGiftCardPin(args.pin)) {
@@ -213,7 +213,8 @@ export const createPurchase = action({
   ): Promise<{ giftCardId: Id<"giftCards">; url: string }> => {
     validatePurchaseInput(args);
     await assertRateLimit(ctx, "giftCardPurchaseGlobal", {
-      message: "Gift card checkout is temporarily busy. Please try again shortly.",
+      message:
+        "Gift card checkout is temporarily busy. Please try again shortly.",
     });
     await assertRateLimit(ctx, "giftCardPurchaseByEmail", {
       key: normalizeRateLimitKey(args.purchaserEmail),
@@ -339,7 +340,7 @@ export const createGiftCard = internalMutation({
         : args.recipientEmail;
     const recipientName =
       args.deliveryMethod === "self"
-        ? args.recipientName ?? args.purchaserName
+        ? (args.recipientName ?? args.purchaserName)
         : args.recipientName;
     const claimToken =
       args.deliveryMethod === "email" ? randomToken() : undefined;
@@ -382,7 +383,9 @@ export const createGiftCard = internalMutation({
       claimedByUserId,
       claimedAt,
       claimToken,
-      claimTokenExpiresAt: claimToken ? now + GIFT_CARD_CLAIM_TTL_MS : undefined,
+      claimTokenExpiresAt: claimToken
+        ? now + GIFT_CARD_CLAIM_TTL_MS
+        : undefined,
       accessToken,
       issuedAt: status === "active" ? now : undefined,
       lastFinancialActivityAt: status === "active" ? now : undefined,
@@ -495,11 +498,9 @@ export const activateFromCheckout = internalMutation({
       createdAt: now,
     });
 
-    await ctx.scheduler.runAfter(
-      0,
-      internal.giftCards.sendDeliveryEmails,
-      { giftCardId: card._id },
-    );
+    await ctx.scheduler.runAfter(0, internal.giftCards.sendDeliveryEmails, {
+      giftCardId: card._id,
+    });
     return card._id;
   },
 });
@@ -537,45 +538,142 @@ export const handlePurchaseRefund = internalMutation({
       .first();
     if (!card) return;
 
-    const redemptions = await ctx.db
-      .query("giftCardTransactions")
-      .withIndex("by_gift_card", (q) => q.eq("giftCardId", card._id))
-      .collect();
-    const hasRedeemed = redemptions.some((tx) => tx.type === "redeem");
-
+    // Stripe amount_refunded is cumulative; retries and out-of-order events
+    // must never remove the same credit twice.
+    const refundAmount = roundCurrency(
+      Math.min(
+        card.amount,
+        Math.max(
+          args.refundAmount ?? card.amount,
+          card.refundPendingAmount ?? 0,
+        ),
+      ),
+    );
+    if (
+      !Number.isFinite(refundAmount) ||
+      refundAmount <= (card.refundAmount ?? 0)
+    )
+      return;
+    const delta = roundCurrency(refundAmount - (card.refundAmount ?? 0));
+    const removed = Math.min(card.balance, delta);
+    const balanceAfter = roundCurrency(card.balance - removed);
     const now = Date.now();
-    if (!hasRedeemed && card.balance === card.amount) {
+    const pending = await ctx.db
+      .query("giftCardRedemptions")
+      .withIndex("by_gift_card_status", (q) =>
+        q.eq("giftCardId", card._id).eq("status", "pending"),
+      )
+      .take(1001);
+    if (pending.length > 1000)
+      throw new Error(
+        "Too many pending gift card redemptions; refund requires manual reconciliation",
+      );
+    if (pending.length > 0) {
+      // A checkout may already be paid while its webhook is still in flight.
+      // Freeze new spending, then let paid reservations capture normally.
+      // Only release an external checkout after Stripe confirms expiry.
       await ctx.db.patch(card._id, {
-        status: "voided",
-        balance: 0,
-        reservedBalance: 0,
-        refundedAt: now,
-        refundAmount: args.refundAmount,
-        voidReason: "Purchase refunded",
-        lastFinancialActivityAt: now,
+        refundPendingAmount: refundAmount,
         updatedAt: now,
       });
-      await ctx.db.insert("giftCardTransactions", {
-        giftCardId: card._id,
-        type: "refund",
-        amount: -card.amount,
-        balanceBefore: card.balance,
-        balanceAfter: 0,
-        note: "Purchase refunded before redemption",
-        createdAt: now,
-      });
+      for (const reservation of pending) {
+        if (reservation.stripeCheckoutSessionId) {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.giftCards.expireRefundedCheckout,
+            {
+              sessionId: reservation.stripeCheckoutSessionId,
+              reservationId: reservation._id,
+            },
+          );
+        } else {
+          await ctx.scheduler.runAt(Math.max(now, reservation.expiresAt), internal.giftCards.releaseUnattachedRefundReservation, { reservationId: reservation._id });
+        }
+      }
       return;
     }
-
+    const fullyRefunded = refundAmount >= card.amount;
     await ctx.db.patch(card._id, {
+      status:
+        card.status === "voided"
+          ? "voided"
+          : balanceAfter > 0
+            ? "active"
+            : fullyRefunded
+              ? "voided"
+              : "depleted",
+      balance: balanceAfter,
+      reservedBalance: 0,
       refundedAt: now,
-      refundAmount: args.refundAmount,
-      notes: [card.notes, "Purchase refunded after partial use — review manually."]
-        .filter(Boolean)
-        .join("\n"),
+      refundAmount,
+      refundPendingAmount: undefined,
+      voidReason:
+        fullyRefunded && balanceAfter === 0
+          ? "Purchase refunded"
+          : card.voidReason,
+      notes:
+        delta > removed
+          ? [
+              card.notes,
+              `Purchase refund exceeds remaining credit by $${roundCurrency(delta - removed)} — review redeemed funds.`,
+            ]
+              .filter(Boolean)
+              .join("\n")
+          : card.notes,
       lastFinancialActivityAt: now,
       updatedAt: now,
     });
+    await ctx.db.insert("giftCardTransactions", {
+      giftCardId: card._id,
+      type: "refund",
+      amount: -removed,
+      balanceBefore: card.balance,
+      balanceAfter,
+      stripePaymentIntentId: args.stripePaymentIntentId,
+      note: `Purchase refund: $${delta}; credit removed: $${removed}`,
+      createdAt: now,
+    });
+  },
+});
+
+export const releaseUnattachedRefundReservation = internalMutation({
+  args: { reservationId: v.id("giftCardRedemptions") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const reservation = await ctx.db.get(args.reservationId);
+    if (!reservation || reservation.status !== "pending") return null;
+    const card = await ctx.db.get(reservation.giftCardId);
+    if (!card || card.refundPendingAmount === undefined) return null;
+    if (reservation.stripeCheckoutSessionId) {
+      await ctx.scheduler.runAfter(0, internal.giftCards.expireRefundedCheckout, { sessionId: reservation.stripeCheckoutSessionId, reservationId: reservation._id });
+    } else if (reservation.expiresAt <= Date.now()) {
+      await ctx.runMutation(internal.giftCards.releaseReservation, { reservationId: reservation._id, reason: "Refunded purchase: checkout was never attached before hold expiry" });
+    }
+    return null;
+  },
+});
+
+export const expireRefundedCheckout = internalAction({
+  args: { sessionId: v.string(), reservationId: v.id("giftCardRedemptions") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    let session = await stripeApiCall(
+      `checkout/sessions/${encodeURIComponent(args.sessionId)}`,
+      { method: "GET" },
+    );
+    if (session.status === "open") {
+      session = await stripeApiCall(
+        `checkout/sessions/${encodeURIComponent(args.sessionId)}/expire`,
+        { method: "POST" },
+      );
+    }
+    if (session.status === "expired") {
+      await ctx.runMutation(internal.giftCards.releaseReservation, {
+        reservationId: args.reservationId,
+        reason: "Gift card purchase refunded",
+      });
+    }
+    return null;
   },
 });
 
@@ -650,8 +748,7 @@ async function serializePublicCard(
     recipientEmailMasked: maskEmail(card.recipientEmail),
     message: card.message,
     code:
-      includeCode &&
-      (card.status === "active" || card.status === "depleted")
+      includeCode && (card.status === "active" || card.status === "depleted")
         ? formatGiftCardCodeForDisplay(card.code)
         : null,
     codeLast4: card.codeLast4,
@@ -671,7 +768,8 @@ export const claimByToken = mutation({
   returns: v.id("giftCards"),
   handler: async (ctx, args) => {
     const userId = await getUserIdFromIdentity(ctx);
-    if (!userId) throw new ConvexError({ message: "Sign in to claim this gift card." });
+    if (!userId)
+      throw new ConvexError({ message: "Sign in to claim this gift card." });
     const user = await ctx.db.get(userId);
     if (!user) throw new ConvexError({ message: "User not found." });
 
@@ -679,12 +777,15 @@ export const claimByToken = mutation({
       .query("giftCards")
       .withIndex("by_claim_token", (q) => q.eq("claimToken", args.token))
       .first();
-    if (!card) throw new ConvexError({ message: "This claim link is invalid." });
+    if (!card)
+      throw new ConvexError({ message: "This claim link is invalid." });
     if (card.status !== "active") {
       throw new ConvexError({ message: "This gift card is not active." });
     }
     if (card.claimedByUserId && card.claimedByUserId !== userId) {
-      throw new ConvexError({ message: "This gift card has already been claimed." });
+      throw new ConvexError({
+        message: "This gift card has already been claimed.",
+      });
     }
     if (card.claimTokenExpiresAt && card.claimTokenExpiresAt < Date.now()) {
       throw new ConvexError({
@@ -721,7 +822,8 @@ export const claimByCode = mutation({
   returns: v.id("giftCards"),
   handler: async (ctx, args) => {
     const userId = await getUserIdFromIdentity(ctx);
-    if (!userId) throw new ConvexError({ message: "Sign in to claim this gift card." });
+    if (!userId)
+      throw new ConvexError({ message: "Sign in to claim this gift card." });
     const user = await ctx.db.get(userId);
     if (!user) throw new ConvexError({ message: "User not found." });
 
@@ -731,7 +833,9 @@ export const claimByCode = mutation({
       throw new ConvexError({ message: "This gift card is not active." });
     }
     if (card.claimedByUserId && card.claimedByUserId !== userId) {
-      throw new ConvexError({ message: "This gift card has already been claimed." });
+      throw new ConvexError({
+        message: "This gift card has already been claimed.",
+      });
     }
     if (
       card.recipientEmail &&
@@ -862,9 +966,7 @@ export const getMyGiftCards = query({
     });
 
     return {
-      owned: owned
-        .sort((a, b) => b.createdAt - a.createdAt)
-        .map(serialize),
+      owned: owned.sort((a, b) => b.createdAt - a.createdAt).map(serialize),
       purchased: [...purchasedMap.values()]
         .sort((a, b) => b.createdAt - a.createdAt)
         .map(serialize),
@@ -1070,6 +1172,8 @@ export const reserveForOrder = internalMutation({
     const card = await ctx.db.get(args.giftCardId);
     if (!card) throw new Error("Gift card not found");
     if (card.status !== "active") throw new Error("Gift card is not active");
+    if (card.refundPendingAmount !== undefined)
+      throw new Error("Gift card refund is processing");
     const amount = roundCurrency(args.amount);
     if (amount <= 0) throw new Error("Gift card amount must be positive");
     const available = getAvailableGiftCardBalance(card);
@@ -1116,6 +1220,8 @@ export const attachSessionToReservation = internalMutation({
     stripeCheckoutSessionId: v.string(),
   },
   handler: async (ctx, args) => {
+    const reservation = await ctx.db.get(args.reservationId);
+    if (!reservation || reservation.status !== "pending") throw new Error("Gift card reservation is no longer pending");
     await ctx.db.patch(args.reservationId, {
       stripeCheckoutSessionId: args.stripeCheckoutSessionId,
       updatedAt: Date.now(),
@@ -1151,6 +1257,12 @@ export const captureReservation = internalMutation({
       throw new Error("Gift card balance is insufficient");
     }
 
+    if (card.refundPendingAmount !== undefined && card.stripePaymentIntentId) {
+      await ctx.scheduler.runAfter(0, internal.giftCards.handlePurchaseRefund, {
+        stripePaymentIntentId: card.stripePaymentIntentId,
+        refundAmount: card.refundPendingAmount,
+      });
+    }
     const now = Date.now();
     const balanceBefore = card.balance;
     const balanceAfter = roundCurrency(card.balance - reservation.amount);
@@ -1199,11 +1311,30 @@ export const captureReservationToInvoice = internalMutation({
   }),
   handler: async (ctx, args) => {
     const reservation = await ctx.db.get(args.reservationId);
+    if (
+      reservation?.status === "captured" &&
+      reservation.orderType === "invoice" &&
+      reservation.orderId === args.invoiceId
+    ) {
+      const invoice = await ctx.db.get(args.invoiceId);
+      if (!invoice) throw new Error("Invoice not found");
+      return {
+        remainingBalance: invoice.remainingBalance ?? invoice.total,
+        status: invoice.status,
+      };
+    }
     if (!reservation || reservation.status !== "pending") {
       throw new Error("Gift card reservation is not pending");
     }
+    if (
+      reservation.orderType !== "invoice" ||
+      reservation.orderId !== args.invoiceId
+    ) {
+      throw new Error("Gift card reservation belongs to a different order");
+    }
     const card = await ctx.db.get(reservation.giftCardId);
-    if (!card) throw new Error("Gift card not found");
+    if (!card || card.status !== "active")
+      throw new Error("Gift card is not active");
     const invoice = await ctx.db.get(args.invoiceId);
     if (!invoice) throw new Error("Invoice not found");
     if (invoice.status === "paid" && (invoice.remainingBalance ?? 0) <= 0) {
@@ -1218,6 +1349,12 @@ export const captureReservationToInvoice = internalMutation({
       throw new Error("Gift card balance is insufficient");
     }
 
+    if (card.refundPendingAmount !== undefined && card.stripePaymentIntentId) {
+      await ctx.scheduler.runAfter(0, internal.giftCards.handlePurchaseRefund, {
+        stripePaymentIntentId: card.stripePaymentIntentId,
+        refundAmount: card.refundPendingAmount,
+      });
+    }
     const now = Date.now();
     const balanceBefore = card.balance;
     const balanceAfter =
@@ -1288,6 +1425,12 @@ export const releaseReservation = internalMutation({
     if (!reservation || reservation.status !== "pending") return;
     const card = await ctx.db.get(reservation.giftCardId);
     if (!card) return;
+    if (card.refundPendingAmount !== undefined && card.stripePaymentIntentId) {
+      await ctx.scheduler.runAfter(0, internal.giftCards.handlePurchaseRefund, {
+        stripePaymentIntentId: card.stripePaymentIntentId,
+        refundAmount: card.refundPendingAmount,
+      });
+    }
     const now = Date.now();
     await ctx.db.patch(card._id, {
       reservedBalance: Math.max(
@@ -1478,11 +1621,7 @@ export const getAdminStats = query({
     await requireAdmin(ctx);
     const cards = await ctx.db.query("giftCards").collect();
     const now = new Date();
-    const monthStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      1,
-    ).getTime();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
     const activeCards = cards.filter((card) => card.status === "active");
     const outstanding = activeCards.reduce(
@@ -1499,9 +1638,7 @@ export const getAdminStats = query({
       )
       .reduce((sum, card) => sum + card.amount, 0);
 
-    const transactions = await ctx.db
-      .query("giftCardTransactions")
-      .collect();
+    const transactions = await ctx.db.query("giftCardTransactions").collect();
     const redeemedThisMonth = transactions
       .filter((tx) => tx.type === "redeem" && tx.createdAt >= monthStart)
       .reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
@@ -1591,9 +1728,7 @@ export const getLiabilityReconciliation = query({
     await requireAdmin(ctx);
     const from = args.from ?? 0;
     const to = args.to ?? Date.now();
-    const transactions = await ctx.db
-      .query("giftCardTransactions")
-      .collect();
+    const transactions = await ctx.db.query("giftCardTransactions").collect();
     const balanceChangingTypes = new Set([
       "issue",
       "redeem",
@@ -1687,9 +1822,7 @@ export const listLedgerTransactions = query({
     await requireAdmin(ctx);
     const from = args.from ?? 0;
     const to = args.to ?? Date.now();
-    const transactions = await ctx.db
-      .query("giftCardTransactions")
-      .collect();
+    const transactions = await ctx.db.query("giftCardTransactions").collect();
     const cards = await ctx.db.query("giftCards").collect();
     const cardById = new Map(cards.map((card) => [card._id, card]));
 
@@ -1745,7 +1878,11 @@ export const getAdminDetail = query({
       code: formatGiftCardCodeForDisplay(card.code),
       availableBalance: getAvailableGiftCardBalance(card),
       claimedUser: claimedUser
-        ? { _id: claimedUser._id, name: claimedUser.name, email: claimedUser.email }
+        ? {
+            _id: claimedUser._id,
+            name: claimedUser.name,
+            email: claimedUser.email,
+          }
         : null,
       purchaser: purchaser
         ? { _id: purchaser._id, name: purchaser.name, email: purchaser.email }
@@ -2027,9 +2164,7 @@ export const reinstateGiftCard = mutation({
       throw new Error("Only voided cards can be reinstated");
     }
     if (card.refundedAt || card.voidReason?.toLowerCase().includes("refund")) {
-      throw new Error(
-        "Cards voided by a purchase refund cannot be reinstated",
-      );
+      throw new Error("Cards voided by a purchase refund cannot be reinstated");
     }
     const amount = roundCurrency(args.amount);
     if (amount <= 0) throw new Error("Reinstatement amount must be positive");
@@ -2076,11 +2211,13 @@ export const adjustGiftCardBalance = mutation({
     );
     const card = await ctx.db.get(args.giftCardId);
     if (!card) throw new Error("Gift card not found");
-    if (card.status === "voided") throw new Error("Voided cards cannot be adjusted");
+    if (card.status === "voided")
+      throw new Error("Voided cards cannot be adjusted");
     const amount = roundCurrency(args.amount);
     if (amount === 0) return card.balance;
     const balanceAfter = roundCurrency(card.balance + amount);
-    if (balanceAfter < 0) throw new Error("Adjustment exceeds the card balance");
+    if (balanceAfter < 0)
+      throw new Error("Adjustment exceeds the card balance");
     if (balanceAfter < card.reservedBalance) {
       throw new Error(
         "Adjustment would drop the balance below funds reserved for a pending checkout",

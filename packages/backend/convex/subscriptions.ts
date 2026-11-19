@@ -10,22 +10,10 @@ import { v } from "convex/values";
 import { getUserIdFromIdentity, requireAdmin, isAdmin } from "./auth";
 import { internal, api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getEffectiveServicePrice, type VehicleSize } from "./lib/pricing";
+import { getSubscriptionPlanPriceForVehicle } from "./lib/subscriptionPricing";
+import { computeNextDate } from "./lib/subscriptionDates";
 
 // --- Helpers ---
-
-function computeNextDate(
-  frequency: "biweekly" | "monthly",
-  fromDate?: string,
-): string {
-  const from = fromDate ? new Date(`${fromDate}T12:00:00`) : new Date();
-  if (frequency === "monthly") {
-    from.setMonth(from.getMonth() + 1);
-  } else {
-    from.setDate(from.getDate() + 14);
-  }
-  return from.toISOString().split("T")[0];
-}
 
 function computeFirstDate(
   preferredDayOfWeek: number,
@@ -52,11 +40,22 @@ function validateStartDate(startDate: string): void {
   }
 }
 
+async function getNextAppointmentDate(
+  ctx: import("./_generated/server").QueryCtx,
+  subscriptionId: Id<"subscriptions">,
+  today?: string,
+) {
+  const appointments = await ctx.db.query("appointments")
+    .withIndex("by_subscription_date", q => q.eq("subscriptionId", subscriptionId).gte("scheduledDate", today ?? "0000-01-01"))
+    .take(100);
+  return appointments.find(a => a.status === "pending" || a.status === "confirmed" || a.status === "in_progress")?.scheduledDate ?? null;
+}
+
 // --- Queries ---
 
 export const list = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { today: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const subscriptions = await ctx.db.query("subscriptions").collect();
 
@@ -72,6 +71,7 @@ export const list = query({
         );
         return {
           ...sub,
+          nextAppointmentDate: await getNextAppointmentDate(ctx, sub._id, args.today),
           userName: user?.name || user?.email || "Unknown",
           userEmail: user?.email,
           serviceNames: services
@@ -89,8 +89,8 @@ export const list = query({
 });
 
 export const getByUser = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { today: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const userId = await getUserIdFromIdentity(ctx);
     if (!userId) return [];
 
@@ -115,6 +115,7 @@ export const getByUser = query({
         );
         return {
           ...sub,
+          nextAppointmentDate: await getNextAppointmentDate(ctx, sub._id, args.today),
           serviceNames: serviceDocs.map((s) => s.name),
           vehicleNames: vehicleDocs.map(
             (v) => `${v.year} ${v.make} ${v.model}`,
@@ -225,6 +226,9 @@ export const create = mutation({
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
 
+    if (!args.vehicleIds.length || !args.serviceIds.length) throw new Error("Select at least one vehicle and service");
+    if (new Set(args.vehicleIds).size !== args.vehicleIds.length || new Set(args.serviceIds).size !== args.serviceIds.length) throw new Error("Duplicate vehicles or services are not allowed");
+
     // Validate vehicles belong to user
     for (const vehicleId of args.vehicleIds) {
       const vehicle = await ctx.db.get(vehicleId);
@@ -233,20 +237,24 @@ export const create = mutation({
       }
     }
 
-    // Compute total price from services × vehicles (size-based pricing)
+    // Use the same category pricing as customer checkout.
     let totalPrice = 0;
+    const vehiclePricingSnapshot: NonNullable<Doc<"subscriptions">["vehiclePricingSnapshot"]> = [];
     const vehicles = await Promise.all(
       args.vehicleIds.map((id) => ctx.db.get(id)),
     );
 
     for (const serviceId of args.serviceIds) {
       const service = await ctx.db.get(serviceId);
-      if (!service) throw new Error("Service not found");
+      if (!service?.isActive) throw new Error("Service is not available");
 
       for (const vehicle of vehicles) {
         if (!vehicle) continue;
-        const size: VehicleSize = vehicle.size || "medium";
-        totalPrice += getEffectiveServicePrice(service, size);
+        const price = await getSubscriptionPlanPriceForVehicle(ctx, service, vehicle);
+        if (price <= 0) throw new Error(`${service.name} is not available for this vehicle category`);
+        totalPrice += price;
+        const category = vehicle.vehicleTypeId ? await ctx.db.get(vehicle.vehicleTypeId) : null;
+        vehiclePricingSnapshot.push({ vehicleId: vehicle._id, year: vehicle.year, make: vehicle.make.trim(), model: vehicle.model.trim(), vehicleTypeId: vehicle.vehicleTypeId, vehicleTypeName: category?.name ?? "Unclassified", serviceId, unitPrice: price, capturedAt: Date.now() });
       }
     }
 
@@ -268,6 +276,7 @@ export const create = mutation({
       preferredTime: args.preferredTime,
       location: args.location,
       totalPrice,
+      vehiclePricingSnapshot,
       startDate,
       status: "pending_payment",
       nextScheduledDate: startDate,
@@ -1389,6 +1398,7 @@ export const createNextAppointment = internalAction({
     const futureDate = computeNextDate(
       sub.frequency,
       nextDate,
+      sub.startDate ? Number(sub.startDate.slice(8, 10)) : undefined,
     );
 
     // Update subscription

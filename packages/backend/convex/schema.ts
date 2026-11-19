@@ -331,7 +331,8 @@ const schema = defineSchema({
     .index("by_user", ["userId"])
     .index("by_date", ["scheduledDate"])
     .index("by_status", ["status"])
-    .index("by_subscription", ["subscriptionId"]),
+    .index("by_subscription", ["subscriptionId"])
+    .index("by_subscription_date", ["subscriptionId", "scheduledDate"]),
 
   appointmentAdjustments: defineTable({
     appointmentId: v.id("appointments"),
@@ -799,6 +800,7 @@ const schema = defineSchema({
     voidReason: v.optional(v.string()),
     refundedAt: v.optional(v.number()),
     refundAmount: v.optional(v.number()),
+    refundPendingAmount: v.optional(v.number()),
     createdByUserId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     expiresAt: v.optional(v.number()),
@@ -872,6 +874,7 @@ const schema = defineSchema({
     expiresAt: v.number(),
   })
     .index("by_gift_card", ["giftCardId"])
+    .index("by_gift_card_status", ["giftCardId", "status"])
     .index("by_order", ["orderId"])
     .index("by_session", ["stripeCheckoutSessionId"])
     .index("by_status", ["status"]),
@@ -895,6 +898,16 @@ const schema = defineSchema({
     }),
     totalPrice: v.number(),
     planServiceId: v.optional(v.id("services")),
+    vehiclePricingSnapshot: v.optional(v.array(v.object({
+      vehicleId: v.id("vehicles"), year: v.number(), make: v.string(), model: v.string(),
+      vehicleTypeId: v.optional(v.id("vehicleTypes")), vehicleTypeName: v.string(),
+      serviceId: v.id("services"), unitPrice: v.number(), capturedAt: v.number(),
+    }))),
+    rateCorrections: v.optional(v.array(v.object({
+      correctedAt: v.number(), oldPrice: v.number(), newPrice: v.number(),
+      vehicleId: v.id("vehicles"), vehicleTypeId: v.id("vehicleTypes"),
+      stripePriceId: v.string(), reason: v.string(),
+    }))),
     basePricePerCycle: v.optional(v.number()),
     petFeePerCycle: v.optional(v.number()),
     travelFeePerCycle: v.optional(v.number()),
