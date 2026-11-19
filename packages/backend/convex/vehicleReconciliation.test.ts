@@ -188,3 +188,17 @@ test("researched identity corrections require evidence, retain before-images, an
     (await t.mutation(internal.vehicleReconciliation.applyBatch, args)).updated,
   ).toEqual([]);
 });
+
+
+test("same-category confirmation with padded spelling fields is idempotent",async()=>{
+ const t=convexTest(schema,modules);
+ const record=await t.run(async(ctx)=>{
+  const userId=await ctx.db.insert("users",{name:"Test",email:"padding@example.invalid",role:"client"});
+  const vehicleTypeId=await ctx.db.insert("vehicleTypes",{name:"Truck",slug:"truck",legacySize:"large",isActive:true,displayOrder:1,createdAt:1,updatedAt:1});
+  const vehicleId=await ctx.db.insert("vehicles",{userId,year:2025,make:"GMC",model:"Sierra",vehicleTypeId,vehicleTypeOverrideAt:123,classification:{source:"manual",confidence:"low",needsAdminReview:true}});
+  return {vehicleId,vehicleTypeId,year:2025,make:"GMC",model:"Sierra",source:"manual" as const,confidence:"high" as const,rawCategory:"Reviewed Truck",correctedMake:" GMC ",correctedModel:" Sierra ",confirmExistingManualCategory:true,evidenceUrls:["https://www.gmc.com/trucks/sierra/1500"]};
+ });
+ expect((await t.mutation(internal.vehicleReconciliation.applyBatch,{records:[record]})).updated).toEqual([record.vehicleId]);
+ expect((await t.mutation(internal.vehicleReconciliation.applyBatch,{records:[record]})).updated).toEqual([]);
+ expect(await t.run(ctx=>ctx.db.query("vehicleCategoryReconciliations").take(5))).toHaveLength(1);
+});

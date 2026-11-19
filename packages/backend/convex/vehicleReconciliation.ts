@@ -100,8 +100,8 @@ export const applyBatch = internalMutation({
       else if (
         vehicle.vehicleTypeId &&
         !vehicle.classification?.needsAdminReview &&
-        (!record.correctedMake || record.correctedMake === vehicle.make) &&
-        (!record.correctedModel || record.correctedModel === vehicle.model)
+        (!record.correctedMake || record.correctedMake.trim() === vehicle.make) &&
+        (!record.correctedModel || record.correctedModel.trim() === vehicle.model)
       )
         reason = "Already resolved";
       if (reason || !vehicle || !type) {
