@@ -1,8 +1,8 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
-import { modules } from "./test.setup";
+import { modules, stripeFetchMock } from "./test.setup";
 import { seedBookingSetup } from "./testUtils/bookingSetup";
 
 async function createUser(
@@ -993,4 +993,77 @@ test("online purchase remains unpaid until fulfillment and duplicate fulfillment
       .take(10),
   );
   expect(ledger.filter((t) => t.type === "issue")).toHaveLength(1);
+});
+
+test("legitimate owners can validate a card repeatedly without consuming PIN attempts", async () => {
+  const t = convexTest(schema, modules);
+  const owner = await createUser(t, {
+    name: "Owner",
+    email: "owner@test.invalid",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "self",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Owner",
+    purchaserUserId: owner,
+    purchaserEmail: "owner@test.invalid",
+    pin: "4321",
+  });
+  const asOwner = t.withIdentity({
+    subject: owner,
+    email: "owner@test.invalid",
+  });
+  for (let i = 0; i < 7; i++)
+    expect(
+      (
+        await asOwner.action(api.giftCards.validateForBooking, {
+          code: gift.code,
+          orderAmount: 10,
+        })
+      ).appliedAmount,
+    ).toBe(10);
+});
+
+test("webhook audit is read-only and identifies missing required gift-card events without leaking other endpoint data", async () => {
+  vi.stubEnv("CONVEX_SITE_URL", "https://app.convex.site");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL, options?: RequestInit) => {
+      expect(options?.method).toBe("GET");
+      expect(new URL(String(url)).pathname).toBe("/v1/webhook_endpoints");
+      return Response.json({
+        has_more: false,
+        data: [
+          {
+            id: "we_app",
+            url: "https://app.convex.site/stripe/webhook",
+            status: "enabled",
+            livemode: true,
+            enabled_events: ["checkout.session.completed"],
+          },
+          {
+            id: "we_other",
+            url: "https://other.example/secret",
+            status: "enabled",
+            livemode: true,
+            enabled_events: ["*"],
+          },
+        ],
+      });
+    }),
+  );
+  const t = convexTest(schema, modules);
+  const result = await t.action(
+    internal.giftCards.auditStripeWebhookConfiguration,
+    {},
+  );
+  expect(result.endpoints).toHaveLength(1);
+  expect(result.endpoints[0].missingEvents).toContain("charge.refunded");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.stubGlobal("fetch", vi.fn(stripeFetchMock));
 });

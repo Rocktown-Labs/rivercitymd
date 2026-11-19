@@ -8,7 +8,7 @@ Read-only snapshot: 229 vehicles, 108 missing a category, 27 flagged. These sets
 
 The direct FuelEconomy sweep found only 19 exact model-menu matches. Canonical make aliases, case/spacing normalization and base-model variant matching recovered category evidence for 66 inputs. These exploratory prefix matches were not used directly to update production.
 
-The final app-level development sweep exercised `vehicleTypes:classify` on all 100 inputs: 67 high-confidence FuelEconomy results, 6 high-confidence vPIC results and 27 manual-review results. All actions returned successfully. The approved write set contains 82 records, excluding medium/low confidence, AI-only results, existing category conflicts and manual overrides. 27 records remain for manual confirmation.
+The final app-level development sweep exercised `vehicleTypes:classify` on all 100 inputs: 73 high-confidence FuelEconomy results, 4 high-confidence vPIC results and 23 manual-review results. All actions returned successfully. The approved write set contains 85 records, excluding medium/low confidence, AI-only results, existing category conflicts and manual overrides. 24 records remain for manual confirmation.
 
 - FuelEconomy parameters are canonical menu **values**, not arbitrary case-insensitive user text. Follow year → make → model → options → vehicle. Base names such as `Sorento`, `CRV`, `GX470` and `Tacoma` often need canonical punctuation and drivetrain variants. Evaluate every plausible model/option and require category agreement; never select the first arbitrary trim.
 - Whitespace, case, punctuation and drivetrain labels are safe to normalize. Partial words (`4run`), brand/model typos (`Hobda`, `Toyoya`, `Nissisn`), trim-only names (`Denali`, `Elevation`, `STX`) need a model choice before classification; `Unknown` remains manual work. Do not rewrite the customer's saved vehicle identity or guess from legacy size.
@@ -50,14 +50,14 @@ Browser check: the development booking form shows Denali model/body choices incl
 | 2014 | GMC | Acadia | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 4WD; Standard Sport Utility Vehicle 2WD |
 | 2014 | Honda | CR-V | SUV | fuelEconomy / high: Small Sport Utility Vehicle 2WD; Small Sport Utility Vehicle 4WD |
 | 2014 | Lexus | G350 | Manual review | fallback / low: No reliable category |
-| 2014 | Lexus | GS | Car | vpic / high: Passenger Car |
+| 2014 | Lexus | GS | Car | fuelEconomy / high: Midsize Cars |
 | 2014 | f150 | STX | Manual review | fallback / low: No reliable category |
 | 2015 | Ford | Mustang | Car | fuelEconomy / high: Subcompact Cars |
 | 2015 | GMC | 1500 | Manual review | fallback / low: No reliable category |
 | 2015 | TOYOTA | Tacoma | Truck | fuelEconomy / high: Small Pickup Trucks 2WD; Small Pickup Trucks 4WD |
 | 2016 | Chevrolet | Colorado | Manual review | fallback / low: Conflicting provider categories; manual confirmation required |
 | 2016 | GMC | Sierr 2500HD Denali | Manual review | fallback / low: No reliable category |
-| 2016 | Honda | Civic | Car | vpic / high: Passenger Car |
+| 2016 | Honda | Civic | Car | fuelEconomy / high: Compact Cars; Midsize Cars |
 | 2016 | Kia | Soul | Car | fuelEconomy / high: Small Station Wagons |
 | 2017 | GMC | Terrain | SUV | fuelEconomy / high: Small Sport Utility Vehicle 4WD; Small Sport Utility Vehicle 2WD |
 | 2018 | GMC | SIERRA k2500 | Truck | vpic / high: Truck |
@@ -72,14 +72,14 @@ Browser check: the development booking form shows Denali model/body choices incl
 | 2019 | Toyota | Camry | Car | fuelEconomy / high: Midsize Cars |
 | 2019 | jeep | compass | SUV | fuelEconomy / high: Small Sport Utility Vehicle 4WD; Small Sport Utility Vehicle 2WD |
 | 2020 | Chevrolet | silverado  LTZ | Truck | fuelEconomy / high: Standard Pickup Trucks 2WD; Standard Pickup Trucks 4WD |
-| 2020 | Jeep | Grand Cherokee L | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 4WD |
+| 2020 | Jeep | Grand Cherokee L | SUV | fuelEconomy / high: Small Sport Utility Vehicle 4WD; Small Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
 | 2020 | Lincoln | Nautilus | SUV | fuelEconomy / high: Small Sport Utility Vehicle 4WD; Small Sport Utility Vehicle 2WD |
 | 2020 | bmw | x5 | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 4WD; Standard Sport Utility Vehicle 2WD |
 | 2021 | Audi | Q5 | SUV | fuelEconomy / high: Small Sport Utility Vehicle 4WD |
 | 2021 | Cadillac | Escalade | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
 | 2021 | Denali | Denali | Manual review | fallback / low: No reliable category |
 | 2021 | Honda | Odyssey | Van | fuelEconomy / high: Minivan - 2WD |
-| 2021 | Mercedes | GLB | Manual review | fallback / low: No reliable category |
+| 2021 | Mercedes | GLB | Manual review | fallback / low: Conflicting provider categories; manual confirmation required |
 | 2021 | Mercedes | GLB 250 | Manual review | fallback / low: Conflicting provider categories; manual confirmation required |
 | 2021 | Nissisn | Armda | Manual review | fallback / low: No reliable category |
 | 2021 | Toyota | Prius | Car | fuelEconomy / high: Midsize Cars |
@@ -101,7 +101,7 @@ Browser check: the development booking form shows Denali model/body choices incl
 | 2023 | Toyota | Rav 4 | SUV | fuelEconomy / high: Small Sport Utility Vehicle 2WD; Small Sport Utility Vehicle 4WD |
 | 2023 | Volvo | Xc40 | SUV | fuelEconomy / high: Small Sport Utility Vehicle 2WD; Small Sport Utility Vehicle 4WD |
 | 2024 | Cadillac | Escalade | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
-| 2024 | Chevy | Z71 suburban | Manual review | fallback / low: No reliable category |
+| 2024 | Chevy | Z71 suburban | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
 | 2024 | Ford | Maverick | Truck | fuelEconomy / high: Small Pickup Trucks 4WD; Small Pickup Trucks 2WD |
 | 2024 | Honda | Odyssey | Van | fuelEconomy / high: Minivan - 2WD |
 | 2024 | Jeep | Grand Cherokee | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
@@ -117,9 +117,9 @@ Browser check: the development booking form shows Denali model/body choices incl
 | 2025 | Chevy | Tahoe | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
 | 2025 | FORD | F-250 | Truck | vpic / high: Truck |
 | 2025 | Ford | f150 | Truck | fuelEconomy / high: Standard Pickup Trucks 4WD; Standard Pickup Trucks 2WD |
-| 2025 | GMC | Sierra 1500 4wd | Manual review | fallback / low: No reliable category |
-| 2025 | GMC | Sierra 2500 HD | Manual review | fallback / low: No reliable category |
-| 2025 | Gmc | Sierra 2500 | Manual review | fallback / low: No reliable category |
+| 2025 | GMC | Sierra 1500 4wd | Truck | fuelEconomy / high: Standard Pickup Trucks 2WD; Standard Pickup Trucks 4WD |
+| 2025 | GMC | Sierra 2500 HD | Truck | fuelEconomy / high: Standard Pickup Trucks 2WD; Standard Pickup Trucks 4WD |
+| 2025 | Gmc | Sierra 2500 | Truck | fuelEconomy / high: Standard Pickup Trucks 2WD; Standard Pickup Trucks 4WD |
 | 2025 | Gmc | Yukon | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
 | 2025 | Lexus | GX 550 | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 4WD |
 | 2025 | Toyota | Sequoia | SUV | fuelEconomy / high: Standard Sport Utility Vehicle 2WD; Standard Sport Utility Vehicle 4WD |
@@ -136,21 +136,19 @@ User confirmed on 2026-11-19 that uncertain records should stay flagged. No mode
 | Year | Make | Model | Reason |
 | --- | --- | --- | --- |
 | 1966 | flinstone | mobile | Missing or ambiguous make/model/category |
-| 2025 | Gmc | Sierra 2500 | Missing or ambiguous make/model/category |
 | 2022 | GMC | Denali | Denali is a trim shared by multiple models; choose the actual model |
 | 2019 | HD | Trike | Missing or ambiguous make/model/category |
 | 2014 | Lexus | G350 | Missing or ambiguous make/model/category |
 | 2009 | Hobda | Accord | Missing or ambiguous make/model/category |
 | 2024 | Toyoya | Camry | Missing or ambiguous make/model/category |
 | 2019 | Chevy | Silverado | Conflicting provider categories; manual confirmation required |
-| 2024 | Chevy | Z71 suburban | Missing or ambiguous make/model/category |
 | 2016 | GMC | Sierr 2500HD Denali | Missing or ambiguous make/model/category |
 | 2021 | Denali | Denali | Missing or ambiguous make/model/category |
 | 2023 | GMC | Arcadia | Missing or ambiguous make/model/category |
 | 2006 | Toyota | 4run | Missing or ambiguous make/model/category |
 | 2013 | Lexus | 570 | Missing or ambiguous make/model/category |
 | 2015 | GMC | 1500 | Missing or ambiguous make/model/category |
-| 2021 | Mercedes | GLB | Missing or ambiguous make/model/category |
+| 2021 | Mercedes | GLB | Conflicting provider categories; manual confirmation required |
 | 2022 | Gmc | Elevation | Elevation is a trim shared by multiple models; choose the actual model |
 | 2002 | Dodge | Ram 2500 | Missing or ambiguous make/model/category |
 | 2025 | GMC | Sierra 2500 HD | Manual selection preserved |
@@ -159,7 +157,6 @@ User confirmed on 2026-11-19 that uncertain records should stay flagged. No mode
 | 2021 | Nissisn | Armda | Missing or ambiguous make/model/category |
 | 2014 | f150 | STX | Missing or ambiguous make/model/category |
 | 2016 | Chevrolet | Colorado | Conflicting provider categories; manual confirmation required |
-| 2025 | GMC | Sierra 1500 4wd | Missing or ambiguous make/model/category |
 | 2022 | Volvo | XC90 B6 AWD | Missing or ambiguous make/model/category |
 | 2010 | Audi | Unknown | Missing or ambiguous make/model/category |
 
@@ -177,6 +174,10 @@ Verified fixes: a signed-in purchaser sending a gift no longer becomes its claim
 
 OCR scan succeeded using the configured Cloudflare model. Confirmed high-impact findings (checkout origin, admin role verification, failed PIN attempts, unpaid adjustments) were addressed. Public access links intentionally let purchasers print the gift code/PIN: that bearer-link behavior is retained, while untrusted checkout return origins are rejected. General pagination/refactoring suggestions are separate from these incident fixes.
 
+Development rehearsal: the initial pass updated 69 available records and flagged 18 previously unflagged records. After the final input refinements, a repeated pass updated two more records; already-resolved and unavailable records were safely skipped. The older development snapshot does not contain every newer production vehicle. Unit tests separately cover before-images, repeated runs, stale identities and manual overrides.
+
+Owner confirmation is tracked in [#212](https://github.com/Rocktown-Labs/rivercitymd/issues/212).
+
 ## Production outcome
 
-Prepared 82 high-confidence category corrections and 27 manual-review records. Pending release and guarded batch application. Manual-review records must remain flagged until a reliable category is available or Dustin confirms the actual vehicle. Janet/Randy's corrected recurring rates and paid invoices must remain unchanged.
+Prepared 85 high-confidence category corrections and 24 manual-review records. Pending release and guarded batch application. Manual-review records must remain flagged until a reliable category is available or Dustin confirms the actual vehicle. Janet/Randy's corrected recurring rates and paid invoices must remain unchanged.
