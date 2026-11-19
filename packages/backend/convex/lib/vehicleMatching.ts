@@ -27,7 +27,22 @@ export function vehicleModelsMatch(input: string, candidate: string) {
   const b = normalizeVehicleModel(candidate);
   if (!a || !b) return false;
   if (a.replaceAll(" ", "") === b.replaceAll(" ", "")) return true;
-  return a.startsWith(`${b} `) || b.startsWith(`${a} `);
+  const compactA = a.replaceAll(" ", "");
+  const compactB = b.replaceAll(" ", "");
+  const familyPrefix = (prefix: string, value: string) => {
+    if (!value.startsWith(prefix) || prefix.length === value.length)
+      return false;
+    const boundary = `${prefix.at(-1)}${value[prefix.length]}`;
+    return /^[a-z]\d$|^\d[a-z]$/.test(boundary);
+  };
+  return (
+    a.startsWith(`${b} `) ||
+    b.startsWith(`${a} `) ||
+    a.endsWith(` ${b}`) ||
+    a.includes(` ${b} `) ||
+    familyPrefix(compactA, compactB) ||
+    familyPrefix(compactB, compactA)
+  );
 }
 
 export function normalizeVehicleInput(

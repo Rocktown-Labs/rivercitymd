@@ -588,7 +588,7 @@ test("real vPIC model listings need a typed request for an excluded heavy-duty p
     "fetch",
     vi.fn(async (url: string | URL) => {
       const u = String(url);
-      if (u.includes("fueleconomy.gov"))
+      if (requestHost(url) === "www.fueleconomy.gov")
         return Response.json({}, { status: 503 });
       const model = { Make_Name: "FORD", Model_Name: "F-250" };
       if (u.includes("/vehicletype/truck"))
@@ -691,7 +691,7 @@ test("the broad vPIC Truck type does not silently classify a cargo van as a pick
     "fetch",
     vi.fn(async (url: string | URL) => {
       const u = String(url);
-      if (u.includes("fueleconomy.gov"))
+      if (requestHost(url) === "www.fueleconomy.gov")
         return Response.json({}, { status: 503 });
       const model = { Make_Name: "FORD", Model_Name: "Transit" };
       if (u.includes("/vehicletype/truck"))
