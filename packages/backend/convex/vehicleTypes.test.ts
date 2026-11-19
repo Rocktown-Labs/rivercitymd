@@ -22,30 +22,57 @@ describe("vehicleTypes", () => {
 
   test("canonicalizes lowercased makes and models for case-sensitive upstream options", async () => {
     const t = convexTest(schema, modules);
-    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
-      const value = String(url);
-      if (value.includes("/menu/make")) return Response.json({ menuItem: { text: "Tesla", value: "Tesla" } });
-      if (value.includes("/menu/model")) return Response.json({ menuItem: { text: "Model S", value: "Model S" } });
-      if (value.includes("/menu/options")) {
-        expect(value).toContain("make=Tesla&model=Model%20S");
-        return Response.json({ menuItem: { value: "12345" } });
-      }
-      return Response.json({ VClass: "Large Cars" });
-    }));
-    expect((await t.action(api.vehicleTypes.classify, { year: 2025, make: "tesla", model: "model s" })).vehicleTypeName).toBe("Car");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const value = String(url);
+        if (value.includes("/menu/make"))
+          return Response.json({ menuItem: { text: "Tesla", value: "Tesla" } });
+        if (value.includes("/menu/model"))
+          return Response.json({
+            menuItem: { text: "Model S", value: "Model S" },
+          });
+        if (value.includes("/menu/options")) {
+          expect(value).toContain("make=Tesla&model=Model%20S");
+          return Response.json({ menuItem: { value: "12345" } });
+        }
+        return Response.json({ VClass: "Large Cars" });
+      }),
+    );
+    expect(
+      (
+        await t.action(api.vehicleTypes.classify, {
+          year: 2025,
+          make: "tesla",
+          model: "model s",
+        })
+      ).vehicleTypeName,
+    ).toBe("Car");
   });
 
   test("yearless multiword make search uses vPIC when Fuel Economy is unavailable", async () => {
     const t = convexTest(schema, modules);
-    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
-      const value = String(url);
-      if (requestHost(url) === "www.fueleconomy.gov") return Response.json({}, { status: 503 });
-      expect(value).toContain("make/land%20rover/");
-      return Response.json({ Results: [{ Make_Name: "LAND ROVER", Model_Name: "Range Rover" }] });
-    }));
-    const results = await t.action(api.vehicleTypes.searchModels, { query: "land rover range" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const value = String(url);
+        if (requestHost(url) === "www.fueleconomy.gov")
+          return Response.json({}, { status: 503 });
+        expect(value).toContain("make/land%20rover/");
+        return Response.json({
+          Results: [{ Make_Name: "LAND ROVER", Model_Name: "Range Rover" }],
+        });
+      }),
+    );
+    const results = await t.action(api.vehicleTypes.searchModels, {
+      query: "land rover range",
+    });
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0]).toMatchObject({ make: "LAND ROVER", model: "Range Rover", source: "vpic" });
+    expect(results[0]).toMatchObject({
+      make: "LAND ROVER",
+      model: "Range Rover",
+      source: "vpic",
+    });
   });
 
   test("seeds default vehicle types", async () => {
@@ -478,4 +505,332 @@ describe("vehicleTypes", () => {
     expect(result.confidence).toBe("low");
     expect(result.needsAdminReview).toBe(true);
   });
+});
+
+test("classifies base CRV input across provider drivetrain variants", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: "Honda", value: "Honda" } });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "CR-V AWD", value: "CR-V AWD" },
+            { text: "CR-V FWD", value: "CR-V FWD" },
+          ],
+        });
+      if (u.includes("/menu/options"))
+        return Response.json({
+          menuItem: { value: u.includes("AWD") ? "1" : "2" },
+        });
+      return Response.json({ VClass: "Small Sport Utility Vehicle 4WD" });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.classify, {
+    year: 2019,
+    make: "honda",
+    model: "crv",
+  });
+  expect(result).toMatchObject({
+    vehicleTypeName: "SUV",
+    source: "fuelEconomy",
+    needsAdminReview: false,
+  });
+});
+
+test("conflicting body categories require review instead of choosing the first trim", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({
+          menuItem: { text: "Ford", value: "Ford" },
+        });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Transit 2WD", value: "Transit 2WD" },
+            {
+              text: "Transit Cab Chassis 2WD",
+              value: "Transit Cab Chassis 2WD",
+            },
+          ],
+        });
+      if (u.includes("/menu/options"))
+        return Response.json({
+          menuItem: { value: u.includes("Chassis") ? "2" : "1" },
+        });
+      return Response.json({
+        VClass: u.endsWith("/2")
+          ? "Special Purpose Vehicle 2WD"
+          : "Van",
+      });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.classify, {
+    year: 2016,
+    make: "Ford",
+    model: "Transit",
+  });
+  expect(result.vehicleTypeId).toBeUndefined();
+  expect(result.needsAdminReview).toBe(true);
+  expect(result.rawCategory).toContain("Conflicting");
+});
+
+test("real vPIC model listings need a typed request for an excluded heavy-duty pickup", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (requestHost(url) === "www.fueleconomy.gov")
+        return Response.json({}, { status: 503 });
+      const model = { Make_Name: "FORD", Model_Name: "F-250" };
+      if (u.includes("/vehicletype/truck"))
+        return Response.json({
+          Results: [{ ...model, VehicleTypeName: "Truck" }],
+        });
+      if (u.includes("/vehicletype/")) return Response.json({ Results: [] });
+      return Response.json({ Results: [model] });
+    }),
+  );
+  expect(
+    await t.action(api.vehicleTypes.classify, {
+      year: 2025,
+      make: "FORD",
+      model: "F250",
+    }),
+  ).toMatchObject({
+    vehicleTypeName: "Truck",
+    source: "vpic",
+    confidence: "high",
+  });
+});
+
+test("full Yukon Denali search returns real base-model candidates rather than requiring exact trim spelling", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: "GMC", value: "GMC" } });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Yukon 4WD", value: "Yukon 4WD" },
+            { text: "Yukon 2WD", value: "Yukon 2WD" },
+          ],
+        });
+      return Response.json({ Results: [] });
+    }),
+  );
+  const results = await t.action(api.vehicleTypes.searchModels, {
+    query: "2023 gmc yukon denali",
+  });
+  expect(results.map((r) => r.model)).toContain("Yukon 4WD");
+});
+
+test.each([
+  "2023 GMC Denali",
+  "2023 denali",
+  "GMC DENALI",
+  "denali",
+  "2023 GMC Elevation",
+])(
+  "trim-only lookup offers real model families without selecting a price: %s",
+  async (query) => {
+    const t = convexTest(schema, modules);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes("/menu/make"))
+          return Response.json({ menuItem: { text: "GMC", value: "GMC" } });
+        if (u.includes("/menu/model"))
+          return Response.json({
+            menuItem: [
+              { text: "Sierra 2WD", value: "Sierra 2WD" },
+              { text: "Sierra 4WD", value: "Sierra 4WD" },
+              {
+                text: "Sierra Cab Chassis 2WD",
+                value: "Sierra Cab Chassis 2WD",
+              },
+              { text: "Yukon 2WD", value: "Yukon 2WD" },
+              { text: "Terrain AWD", value: "Terrain AWD" },
+              { text: "Savana", value: "Savana" },
+            ],
+          });
+        return Response.json({ Results: [] });
+      }),
+    );
+    const results = await t.action(api.vehicleTypes.searchModels, { query });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.make === "GMC" && r.matchedTrim)).toBe(true);
+    expect(results.some((r) => r.model === "Savana")).toBe(false);
+    if (!query.toLowerCase().includes("elevation"))
+      expect(results.map((r) => r.model)).toContain("Yukon 2WD");
+    const classified = await t.action(api.vehicleTypes.classify, {
+      year: 2023,
+      make: "GMC",
+      model: query.includes("Elevation") ? "Elevation" : "Denali",
+    });
+    expect(classified.vehicleTypeId).toBeUndefined();
+    expect(classified.needsAdminReview).toBe(true);
+  },
+);
+
+test("the broad vPIC Truck type does not silently classify a cargo van as a pickup", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (requestHost(url) === "www.fueleconomy.gov")
+        return Response.json({}, { status: 503 });
+      const model = { Make_Name: "FORD", Model_Name: "Transit" };
+      if (u.includes("/vehicletype/truck"))
+        return Response.json({
+          Results: [{ ...model, VehicleTypeName: "Truck" }],
+        });
+      if (u.includes("/vehicletype/")) return Response.json({ Results: [] });
+      return Response.json({ Results: [model] });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.classify, {
+    year: 2025,
+    make: "Ford",
+    model: "Transit",
+  });
+  expect(result.vehicleTypeId).toBeUndefined();
+  expect(result.needsAdminReview).toBe(true);
+});
+
+test("an unknown trim on any recognized make recovers to selectable model/body options, including commercial bodies", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({
+          menuItem: { text: "Chevrolet", value: "Chevrolet" },
+        });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Silverado 2WD", value: "Silverado 2WD" },
+            {
+              text: "Silverado Cab Chassis 2WD",
+              value: "Silverado Cab Chassis 2WD",
+            },
+          ],
+        });
+      return Response.json({ Results: [] });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.searchModels, {
+    query: "2024 Chevrolet Custom Fleet Trim",
+  });
+  expect(result.map((r) => r.model)).toContain("Silverado Cab Chassis 2WD");
+  expect(result.every((r) => r.matchedTrim)).toBe(true);
+});
+
+test.each([
+  ["2024 STX", "Ford", "F-150"],
+  ["2024 SR5", "Toyota", "Tundra"],
+  ["2024 LTZ", "Chevrolet", "Silverado Cab Chassis 2WD"],
+  ["2024 Long Range", "Tesla", "Model 3"],
+])("trim-only hints work across makes: %s", async (query, make, model) => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: make, value: make } });
+      if (u.includes("/menu/model"))
+        return Response.json({ menuItem: { text: model, value: model } });
+      return Response.json({ Results: [] });
+    }),
+  );
+  expect(
+    (await t.action(api.vehicleTypes.searchModels, { query })).map(
+      (r) => r.model,
+    ),
+  ).toContain(model);
+});
+
+test("a matching commercial vPIC model outranks broad passenger-model recovery choices", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: "Ford", value: "Ford" } });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Mustang", value: "Mustang" },
+            { text: "Escape AWD", value: "Escape AWD" },
+            { text: "Explorer AWD", value: "Explorer AWD" },
+          ],
+        });
+      return Response.json({
+        Results: [{ Make_Name: "FORD", Model_Name: "F-250" }],
+      });
+    }),
+  );
+  const results = await t.action(api.vehicleTypes.searchModels, {
+    query: "2025 Ford F250",
+  });
+  expect(results.map((r) => r.model)).toEqual(["F-250"]);
+});
+
+test("manufacturer evidence resolves a GLB SUV despite differing EPA wagon/SUV classes", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({
+          menuItem: { text: "Mercedes-Benz", value: "Mercedes-Benz" },
+        });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "GLB250", value: "GLB250" },
+            { text: "GLB250 4matic", value: "GLB250 4matic" },
+          ],
+        });
+      if (u.includes("/menu/options"))
+        return Response.json({
+          menuItem: { value: u.includes("4matic") ? "2" : "1" },
+        });
+      return Response.json({
+        VClass: u.endsWith("/2")
+          ? "Small Sport Utility Vehicle 4WD"
+          : "Small Station Wagons",
+      });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.classify, {
+    year: 2021,
+    make: "Mercedes",
+    model: "GLB 250",
+  });
+  expect(result).toMatchObject({
+    vehicleTypeName: "SUV",
+    source: "fallback",
+    confidence: "high",
+    needsAdminReview: false,
+  });
+  expect(result.rawCategory).toContain("Manufacturer evidence:");
 });

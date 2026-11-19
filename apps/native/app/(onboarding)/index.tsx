@@ -147,6 +147,10 @@ export default function OnboardingScreen() {
       return;
     }
 
+    if (validVehicles.some((vehicle) => !vehicle.vehicleTypeId)) {
+      setError("Choose a category for each vehicle for accurate pricing.");
+      return;
+    }
     setIsLoading(true);
     try {
       await createUserProfile({

@@ -1,3 +1,15 @@
+import { getManufacturerCategoryEvidence } from "./lib/vehicleManufacturerEvidence";
+import {
+  resolveTrimSearch,
+  trimModelFamily,
+  trimModelChoiceKey,
+} from "./lib/vehicleTrims";
+import {
+  normalizeVehicleInput,
+  isPickupModel,
+  normalizeVehicleModel,
+  vehicleModelsMatch,
+} from "./lib/vehicleMatching";
 import { parseVehicleSearch } from "./lib/vehicleSearch";
 import { ConvexError, v } from "convex/values";
 import {
@@ -300,7 +312,7 @@ function mapCategoryToSlug(value: string | undefined): {
   if (
     normalized.includes("recreational vehicle") ||
     normalized.includes("motorhome") ||
-    normalized.includes("rv")
+    /\brv\b/.test(normalized)
   ) {
     return { slug: "van", confidence: "medium" };
   }
@@ -343,6 +355,7 @@ function mapCategoryToSlug(value: string | undefined): {
     return { slug: "motorcycle", confidence: "medium" };
   }
   if (
+    normalized === "passenger car" ||
     normalized.includes("compact") ||
     normalized.includes("midsize") ||
     normalized.includes("large cars") ||
@@ -352,29 +365,9 @@ function mapCategoryToSlug(value: string | undefined): {
     return { slug: "car", confidence: "high" };
   }
   if (normalized.includes("special purpose")) {
-    return { slug: "van", confidence: "medium" };
+    return { slug: "van", confidence: "low" };
   }
   return { slug: "car", confidence: "low" };
-}
-
-function normalizeModelName(value: string | undefined): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(
-      /\b(all[-\s]?wheel|four[-\s]?wheel|front[-\s]?wheel|rear[-\s]?wheel)\s+drive\b/g,
-      " ",
-    )
-    .replace(/\b(awd|4wd|2wd|fwd|rwd|4x4|2x4)\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function isModelMatch(inputModel: string, candidateModel: string): boolean {
-  const input = normalizeModelName(inputModel);
-  const candidate = normalizeModelName(candidateModel);
-  if (!input || !candidate) return false;
-  return candidate.includes(input) || input.includes(candidate);
 }
 
 function getGeminiApiKey(): string | undefined {
@@ -484,6 +477,7 @@ async function classifyWithGeminiSearch(args: {
 async function fetchJson(url: string) {
   const response = await fetch(url, {
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) {
     throw new Error(`Vehicle lookup failed: ${response.status}`);
@@ -508,6 +502,8 @@ function dedupeVehicleSuggestions(
     make: string;
     model: string;
     source: "fuelEconomy" | "vpic";
+    matchedTrim?: string;
+    broadModelChoices?: boolean;
   }>,
 ) {
   const seen = new Set<string>();
@@ -530,12 +526,15 @@ async function searchFuelEconomyModelsForYear(
   year: number,
   makeQuery: string,
   modelQuery: string,
+  trim: ReturnType<typeof resolveTrimSearch> = null,
 ) {
   const suggestions: Array<{
     year: number;
     make: string;
     model: string;
     source: "fuelEconomy";
+    matchedTrim?: string;
+    broadModelChoices?: boolean;
   }> = [];
   const makes = toMenuItems(
     await fetchJson(
@@ -552,12 +551,62 @@ async function searchFuelEconomyModelsForYear(
         `https://www.fueleconomy.gov/ws/rest/vehicle/menu/model?year=${year}&make=${encodeURIComponent(make.value)}`,
       ),
     );
-    const matchingModels = models
+    if (trim) {
+      const trimWords = normalizeVehicleModel(trim.name);
+      models.sort(
+        (a, b) =>
+          Number(normalizeVehicleModel(b.text).includes(trimWords)) -
+          Number(normalizeVehicleModel(a.text).includes(trimWords)),
+      );
+      const seen = new Set<string>();
+      const primary = models.filter((model) => {
+        const key = trimModelChoiceKey(model.text, trim.families);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      models.splice(
+        0,
+        models.length,
+        ...primary,
+        ...models.filter((model) => !primary.includes(model)),
+      );
+    }
+    const seenFamilies = new Set<string>();
+    let suggestionLimit = modelQuery ? 6 : 3;
+    if (trim) suggestionLimit = 8;
+    let matchingModels = models
       .filter((model) => {
+        if (trim) {
+          const family = trimModelFamily(model.text, trim.families);
+          const body = normalizeVehicleModel(model.text);
+          if (!family || seenFamilies.has(body)) return false;
+          seenFamilies.add(body);
+          return true;
+        }
         if (!modelQuery) return true;
-        return model.text.toLowerCase().includes(modelQuery);
+        return (
+          model.text.toLowerCase().includes(modelQuery) ||
+          vehicleModelsMatch(modelQuery, model.text)
+        );
       })
-      .slice(0, modelQuery ? 6 : 3);
+      .slice(0, suggestionLimit);
+
+    // Every make gets a useful recovery path for an unknown marketing trim.
+    // These are explicit model/body choices, never a guessed trim or price.
+    let broadModelChoices = false;
+    if (!trim && modelQuery && matchingModels.length === 0) {
+      const seen = new Set<string>();
+      matchingModels = models
+        .filter((model) => {
+          const key = normalizeVehicleModel(model.text);
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 8);
+      broadModelChoices = true;
+    }
 
     for (const model of matchingModels) {
       suggestions.push({
@@ -565,6 +614,10 @@ async function searchFuelEconomyModelsForYear(
         make: make.text,
         model: model.text,
         source: "fuelEconomy",
+        ...(trim ? { matchedTrim: trim.name } : {}),
+        ...(broadModelChoices
+          ? { matchedTrim: modelQuery, broadModelChoices: true }
+          : {}),
       });
     }
   }
@@ -573,6 +626,17 @@ async function searchFuelEconomyModelsForYear(
 }
 
 export const searchModels = action({
+  returns: v.array(
+    v.object({
+      year: v.number(),
+      make: v.string(),
+      model: v.string(),
+      label: v.string(),
+      source: v.union(v.literal("fuelEconomy"), v.literal("vpic")),
+      matchedTrim: v.optional(v.string()),
+      broadModelChoices: v.optional(v.boolean()),
+    }),
+  ),
   args: {
     query: v.string(),
   },
@@ -586,6 +650,8 @@ export const searchModels = action({
       model: string;
       label: string;
       source: "fuelEconomy" | "vpic";
+      matchedTrim?: string;
+      broadModelChoices?: boolean;
     }>
   > => {
     const normalizedQuery = args.query.trim().replace(/\s+/g, " ");
@@ -613,14 +679,21 @@ export const searchModels = action({
     }
 
     const parsed = parseVehicleSearch(normalizedQuery);
-    const makeQuery = parsed.make.toLowerCase();
-    const modelQuery = parsed.model.toLowerCase();
+    const lookup = normalizeVehicleInput(parsed.make, parsed.model, year);
+    const trim = resolveTrimSearch(parsed.make, parsed.model);
+    const makeQueries = trim
+      ? trim.makes.map((make) => make.toLowerCase())
+      : [lookup.make.toLowerCase()];
+    const makeQuery = makeQueries[0];
+    const modelQuery = trim ? "" : lookup.model.toLowerCase();
 
     const suggestions: Array<{
       year: number;
       make: string;
       model: string;
       source: "fuelEconomy" | "vpic";
+      matchedTrim?: string;
+      broadModelChoices?: boolean;
     }> = [];
 
     try {
@@ -631,8 +704,10 @@ export const searchModels = action({
             (_, index) => new Date().getFullYear() + 1 - index,
           );
       const results = await Promise.allSettled(
-        years.map((searchYear) =>
-          searchFuelEconomyModelsForYear(searchYear, makeQuery, modelQuery),
+        years.flatMap((searchYear) =>
+          makeQueries.map((make) =>
+            searchFuelEconomyModelsForYear(searchYear, make, modelQuery, trim),
+          ),
         ),
       );
       for (const result of results) {
@@ -644,28 +719,47 @@ export const searchModels = action({
       // vPIC is used as a fallback below.
     }
 
-    if (suggestions.length < 3 && makeQuery.length >= 2) {
+    if (
+      (suggestions.filter((suggestion) => !suggestion.broadModelChoices)
+        .length < 3 ||
+        trim) &&
+      makeQuery.length >= 2
+    ) {
       // Without a year, offer recent model-year candidates, never silently
       // assign a year to the customer's manually entered vehicle.
       const fallbackYears = year
         ? [year]
         : [new Date().getFullYear(), new Date().getFullYear() - 1];
-      for (const fallbackYear of fallbackYears) {
+      for (const [fallbackYear, fallbackMake] of fallbackYears.flatMap((year) =>
+        makeQueries.map((make) => [year, make] as const),
+      )) {
         try {
           const vpic = await fetchJson(
-            `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(makeQuery)}/modelyear/${fallbackYear}?format=json`,
+            `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(fallbackMake)}/modelyear/${fallbackYear}?format=json`,
           );
+          const seenFamilies = new Set<string>();
           for (const result of vpic?.Results ?? []) {
-            const make = String(result.Make_Name ?? makeQuery).trim();
+            const make = String(result.Make_Name ?? fallbackMake).trim();
             const model = String(result.Model_Name ?? "").trim();
             if (!make || !model) continue;
-            if (modelQuery && !model.toLowerCase().includes(modelQuery))
+            if (trim) {
+              const family = trimModelFamily(model, trim.families);
+              const body = normalizeVehicleModel(model);
+              if (!family || seenFamilies.has(body)) continue;
+              seenFamilies.add(body);
+            }
+            if (
+              modelQuery &&
+              !model.toLowerCase().includes(modelQuery) &&
+              !vehicleModelsMatch(modelQuery, model)
+            )
               continue;
             suggestions.push({
               year: fallbackYear,
               make,
               model,
               source: "vpic",
+              ...(trim ? { matchedTrim: trim.name } : {}),
             });
           }
         } catch {
@@ -674,11 +768,31 @@ export const searchModels = action({
       }
     }
 
-    return dedupeVehicleSuggestions(suggestions);
+    const direct = suggestions.filter(
+      (suggestion) => !suggestion.broadModelChoices,
+    );
+    return dedupeVehicleSuggestions(direct.length ? direct : suggestions);
   },
 });
 
 export const classify = action({
+  returns: v.object({
+    vehicleTypeId: v.optional(v.id("vehicleTypes")),
+    vehicleTypeName: v.optional(v.string()),
+    legacySize: legacySizeValidator,
+    source: v.union(
+      v.literal("fuelEconomy"),
+      v.literal("vpic"),
+      v.literal("fallback"),
+    ),
+    confidence: v.union(
+      v.literal("high"),
+      v.literal("medium"),
+      v.literal("low"),
+    ),
+    rawCategory: v.optional(v.string()),
+    needsAdminReview: v.boolean(),
+  }),
   args: {
     year: v.number(),
     make: v.string(),
@@ -696,6 +810,17 @@ export const classify = action({
     rawCategory?: string;
     needsAdminReview: boolean;
   }> => {
+    if (
+      !Number.isInteger(args.year) ||
+      args.year < 1900 ||
+      args.year > new Date().getFullYear() + 1 ||
+      !args.make.trim() ||
+      !args.model.trim() ||
+      args.make.length > 100 ||
+      args.model.length > 200
+    ) {
+      throw new ConvexError({ message: "Enter a valid year, make and model." });
+    }
     await assertRateLimit(ctx, "vehicleLookupGlobal", {
       message: "Vehicle lookup is temporarily busy. Please try again shortly.",
     });
@@ -705,6 +830,16 @@ export const classify = action({
     });
 
     await ctx.runMutation(internal.vehicleTypes.ensureDefaultsInternal, {});
+
+    const trimOnly = resolveTrimSearch(args.make, args.model);
+    if (trimOnly)
+      return {
+        legacySize: "medium",
+        source: "fallback",
+        confidence: "low",
+        needsAdminReview: true,
+        rawCategory: `${trimOnly.name} is a trim shared by multiple models; choose the actual model`,
+      };
 
     if (isHeavyTruckVehicle(args.make, args.model)) {
       const semiType = await ctx.runQuery(
@@ -722,8 +857,18 @@ export const classify = action({
       };
     }
 
-    let canonicalMake = args.make.trim();
-    let canonicalModel = args.model.trim();
+    const lookup = normalizeVehicleInput(args.make, args.model, args.year);
+    let canonicalMake = lookup.make;
+    let modelCandidates: string[] = [lookup.model];
+    let providerModelConfirmed = false;
+    const manufacturer = getManufacturerCategoryEvidence(
+      args.year,
+      args.make,
+      args.model,
+    );
+    const manufacturerDescription = manufacturer
+      ? `Manufacturer evidence: ${manufacturer.make} ${manufacturer.model} is ${manufacturer.slug}; ${manufacturer.url}`
+      : undefined;
     try {
       const makes = toMenuItems(
         await fetchJson(
@@ -738,15 +883,20 @@ export const classify = action({
           `https://www.fueleconomy.gov/ws/rest/vehicle/menu/model?year=${args.year}&make=${encodeURIComponent(canonicalMake)}`,
         ),
       );
-      canonicalModel =
-        models.find(
-          (m) => m.text.toLowerCase() === canonicalModel.toLowerCase(),
-        )?.value ?? canonicalModel;
+      const matches = models.filter((m) =>
+        vehicleModelsMatch(lookup.model, m.text),
+      );
+      providerModelConfirmed = matches.length > 0;
+      // Consider every plausible variant, even if one model name is exact.
+      // A base name can span body styles with different pricing categories.
+      modelCandidates = matches.length
+        ? matches.map((m) => m.value)
+        : [lookup.model];
     } catch {
       /* Other providers and manual category selection remain available. */
     }
     const make = encodeURIComponent(canonicalMake);
-    const model = encodeURIComponent(canonicalModel);
+
     let mapped: {
       slug: string;
       confidence: "high" | "medium" | "low";
@@ -754,37 +904,114 @@ export const classify = action({
     let source: "fuelEconomy" | "vpic" | "fallback" = "fallback";
     let rawCategory: string | undefined;
 
+    let conflictingCategories = false;
     try {
-      const options = await fetchJson(
-        `https://www.fueleconomy.gov/ws/rest/vehicle/menu/options?year=${args.year}&make=${make}&model=${model}`,
-      );
-      const menuItem = Array.isArray(options?.menuItem)
-        ? options.menuItem[0]
-        : options?.menuItem;
-      if (menuItem?.value) {
-        const vehicle = await fetchJson(
-          `https://www.fueleconomy.gov/ws/rest/vehicle/${encodeURIComponent(menuItem.value)}`,
+      if (modelCandidates.length > 12) {
+        conflictingCategories = true;
+        throw new Error("Too many model variants");
+      }
+      const optionIds = new Set<string>();
+      for (const candidate of modelCandidates) {
+        const options = toMenuItems(
+          await fetchJson(
+            `https://www.fueleconomy.gov/ws/rest/vehicle/menu/options?year=${args.year}&make=${make}&model=${encodeURIComponent(candidate)}`,
+          ),
         );
-        rawCategory = vehicle?.VClass;
-        mapped = mapCategoryToSlug(rawCategory);
+        for (const option of options) optionIds.add(option.value);
+      }
+      if (optionIds.size > 40) {
+        conflictingCategories = true;
+        throw new Error("Too many engine/trim variants");
+      }
+      const categories: string[] = [];
+      for (const id of optionIds) {
+        const vehicle = await fetchJson(
+          `https://www.fueleconomy.gov/ws/rest/vehicle/${encodeURIComponent(id)}`,
+        );
+        if (!vehicle?.VClass) throw new Error("Vehicle class is unavailable");
+        categories.push(vehicle.VClass);
+      }
+      const mappedCategories = categories.map(mapCategoryToSlug);
+      const slugs = new Set(mappedCategories.map((category) => category.slug));
+      conflictingCategories =
+        slugs.size > 1 ||
+        categories.some((category) =>
+          category.toLowerCase().includes("special purpose"),
+        );
+      if (
+        categories.length &&
+        !conflictingCategories &&
+        mappedCategories.every((c) => c.confidence !== "low")
+      ) {
+        mapped = mappedCategories[0];
+        rawCategory = [...new Set(categories)].join("; ");
         source = "fuelEconomy";
       }
     } catch {
-      // Fall through to vPIC.
+      // Incomplete provider evidence must not turn into a pricing decision.
     }
 
-    if (source === "fallback" || mapped.confidence === "low") {
+    if (manufacturer && providerModelConfirmed) {
+      mapped = { slug: manufacturer.slug, confidence: "high" };
+      source = "fallback";
+      rawCategory = manufacturerDescription;
+      conflictingCategories = false;
+    }
+
+    if (
+      !conflictingCategories &&
+      !(manufacturer && providerModelConfirmed) &&
+      (source === "fallback" || mapped.confidence === "low")
+    ) {
       try {
         const vpic = await fetchJson(
           `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${make}/modelyear/${args.year}?format=json`,
         );
         const match = (vpic?.Results ?? []).find((result: any) =>
-          isModelMatch(args.model, String(result.Model_Name ?? "")),
+          vehicleModelsMatch(lookup.model, String(result.Model_Name ?? "")),
         );
-        rawCategory =
-          match?.VehicleTypeName ?? match?.Model_Name ?? rawCategory;
+        if (match && manufacturer) {
+          mapped = { slug: manufacturer.slug, confidence: "high" };
+          source = "fallback";
+          rawCategory = manufacturerDescription;
+          providerModelConfirmed = true;
+        } else rawCategory = match?.VehicleTypeName ?? rawCategory;
+        if (
+          match &&
+          !match.VehicleTypeName &&
+          !(manufacturer && providerModelConfirmed)
+        ) {
+          const typed = await Promise.all(
+            ["truck", "passenger car", "motorcycle"].map(async (type) => {
+              const result = await fetchJson(
+                `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${make}/modelyear/${args.year}/vehicletype/${encodeURIComponent(type)}?format=json`,
+              );
+              return (result?.Results ?? []).filter(
+                (row: { Model_Name?: string; VehicleTypeName?: string }) =>
+                  vehicleModelsMatch(lookup.model, row.Model_Name ?? ""),
+              );
+            }),
+          );
+          const classes = [
+            ...new Set<string>(
+              typed
+                .flat()
+                .map((row) => row.VehicleTypeName)
+                .filter(Boolean),
+            ),
+          ];
+          if (
+            classes.length === 1 &&
+            (classes[0].toLowerCase() !== "truck" ||
+              isPickupModel(lookup.model))
+          )
+            rawCategory = classes[0];
+        }
         const vpicMapped = mapCategoryToSlug(rawCategory);
-        if (vpicMapped.confidence !== "low") {
+        if (
+          vpicMapped.confidence !== "low" &&
+          !(manufacturer && providerModelConfirmed)
+        ) {
           mapped = vpicMapped;
           source = "vpic";
         }
@@ -793,7 +1020,7 @@ export const classify = action({
       }
     }
 
-    if (mapped.confidence === "low") {
+    if (mapped.confidence === "low" && !conflictingCategories) {
       try {
         const geminiMapped = await classifyWithGeminiSearch(args);
         if (
@@ -826,7 +1053,9 @@ export const classify = action({
       legacySize: vehicleType?.legacySize ?? "medium",
       source,
       confidence: mapped.confidence,
-      rawCategory,
+      rawCategory: conflictingCategories
+        ? "Conflicting provider categories; manual confirmation required"
+        : rawCategory,
       needsAdminReview: mapped.confidence === "low" || !vehicleType,
     };
   },

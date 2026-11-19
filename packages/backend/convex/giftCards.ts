@@ -7,10 +7,11 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getUserIdFromIdentity, requireAdmin } from "./auth";
-import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
+import { assertRateLimit, normalizeRateLimitKey, rateLimiter } from "./rateLimiter";
 import {
   GIFT_CARD_CLAIM_TTL_MS,
   GIFT_CARD_CURRENCY,
@@ -33,6 +34,7 @@ import {
   normalizeGiftCardEmail,
   roundCurrency,
 } from "./lib/giftCards";
+import { validateGiftCardOrigin } from "./lib/giftCardOrigin";
 import { stripeApiCall } from "./lib/stripeApi";
 
 const deliveryMethodValidator = v.union(
@@ -121,6 +123,7 @@ async function createCheckoutSessionForGiftCard(
   card: Doc<"giftCards">,
   origin: string,
 ): Promise<{ sessionId: string; url: string }> {
+  origin = validateGiftCardOrigin(origin);
   const productId: string = await ctx.runAction(
     internal.giftCards.ensureGiftCardProduct,
     {},
@@ -211,6 +214,7 @@ export const createPurchase = action({
     ctx,
     args,
   ): Promise<{ giftCardId: Id<"giftCards">; url: string }> => {
+    validateGiftCardOrigin(args.origin);
     validatePurchaseInput(args);
     await assertRateLimit(ctx, "giftCardPurchaseGlobal", {
       message:
@@ -347,8 +351,10 @@ export const createGiftCard = internalMutation({
     const status =
       args.paymentMethod === "stripe" ? "pending_payment" : "active";
 
-    let claimedByUserId = args.purchaserUserId;
-    let claimedAt = args.purchaserUserId ? now : undefined;
+    // Buying a gift does not make the buyer its recipient.
+    let claimedByUserId =
+      args.deliveryMethod === "self" ? args.purchaserUserId : undefined;
+    let claimedAt = claimedByUserId ? now : undefined;
     if (recipientEmail) {
       const matchingUser = await ctx.db
         .query("users")
@@ -587,7 +593,11 @@ export const handlePurchaseRefund = internalMutation({
             },
           );
         } else {
-          await ctx.scheduler.runAt(Math.max(now, reservation.expiresAt), internal.giftCards.releaseUnattachedRefundReservation, { reservationId: reservation._id });
+          await ctx.scheduler.runAt(
+            Math.max(now, reservation.expiresAt),
+            internal.giftCards.releaseUnattachedRefundReservation,
+            { reservationId: reservation._id },
+          );
         }
       }
       return;
@@ -645,9 +655,20 @@ export const releaseUnattachedRefundReservation = internalMutation({
     const card = await ctx.db.get(reservation.giftCardId);
     if (!card || card.refundPendingAmount === undefined) return null;
     if (reservation.stripeCheckoutSessionId) {
-      await ctx.scheduler.runAfter(0, internal.giftCards.expireRefundedCheckout, { sessionId: reservation.stripeCheckoutSessionId, reservationId: reservation._id });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.giftCards.expireRefundedCheckout,
+        {
+          sessionId: reservation.stripeCheckoutSessionId,
+          reservationId: reservation._id,
+        },
+      );
     } else if (reservation.expiresAt <= Date.now()) {
-      await ctx.runMutation(internal.giftCards.releaseReservation, { reservationId: reservation._id, reason: "Refunded purchase: checkout was never attached before hold expiry" });
+      await ctx.runMutation(internal.giftCards.releaseReservation, {
+        reservationId: reservation._id,
+        reason:
+          "Refunded purchase: checkout was never attached before hold expiry",
+      });
     }
     return null;
   },
@@ -814,7 +835,26 @@ export const claimByToken = mutation({
   },
 });
 
-export const claimByCode = mutation({
+// Rate limiting must commit in its own action transaction so a failed PIN
+// check cannot roll the attempt counter back with the claim mutation.
+export const claimByCode = action({
+  args: { code: v.string(), pin: v.optional(v.string()) },
+  returns: v.id("giftCards"),
+  handler: async (ctx, args): Promise<Id<"giftCards">> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity)
+      throw new ConvexError({ message: "Sign in to claim this gift card." });
+    await assertRateLimit(ctx, "giftCardClaimByUser", {
+      key: identity.subject,
+    });
+    await assertRateLimit(ctx, "giftCardPinByCode", {
+      key: normalizeGiftCardCode(args.code),
+    });
+    return await ctx.runMutation(internal.giftCards.claimByCodeInternal, args);
+  },
+});
+
+export const claimByCodeInternal = internalMutation({
   args: {
     code: v.string(),
     pin: v.optional(v.string()),
@@ -1018,6 +1058,54 @@ export const revealGiftCardCode = query({
   },
 });
 
+// Return failed guesses instead of throwing so their attempt counters commit.
+// The component and PIN check share a transaction to serialize concurrent guesses.
+export const validatePinInternal = internalMutation({
+  args: { giftCardId: v.id("giftCards"), pin: v.optional(v.string()) },
+  returns: v.object({
+    valid: v.boolean(),
+    limited: v.boolean(),
+    retryAfter: v.optional(v.number()),
+  }),
+  handler: async (ctx, args) => {
+    const card = await ctx.db.get(args.giftCardId);
+    if (!card || card.status !== "active") return { valid: false, limited: false };
+    if (!card.pin) return { valid: true, limited: false };
+    const key = normalizeGiftCardCode(card.code);
+    const available = await rateLimiter.check(ctx, "giftCardPinByCode", { key });
+    if (!available.ok) {
+      return { valid: false, limited: true, retryAfter: available.retryAfter };
+    }
+    if (args.pin?.trim() === card.pin) return { valid: true, limited: false };
+    const consumed = await rateLimiter.limit(ctx, "giftCardPinByCode", { key });
+    return {
+      valid: false,
+      limited: !consumed.ok,
+      ...(!consumed.ok ? { retryAfter: consumed.retryAfter } : {}),
+    };
+  },
+});
+
+async function validateGiftCardPin(
+  ctx: ActionCtx,
+  giftCardId: Id<"giftCards">,
+  pin?: string,
+) {
+  const result = await ctx.runMutation(internal.giftCards.validatePinInternal, {
+    giftCardId,
+    pin,
+  });
+  if (result.limited) {
+    throw new ConvexError({
+      code: "RATE_LIMITED",
+      message: "Too many attempts. Please wait a moment and try again.",
+      retryAfter: result.retryAfter,
+      limit: "giftCardPinByCode",
+    });
+  }
+  if (!result.valid) throw new ConvexError({ message: "That PIN is incorrect." });
+}
+
 export const validateForBooking = action({
   args: {
     code: v.string(),
@@ -1070,9 +1158,7 @@ export const validateForBooking = action({
       });
     }
     if (card.pin && !claimedByCurrentUser) {
-      if (!args.pin || args.pin.trim() !== card.pin) {
-        throw new ConvexError({ message: "That PIN is incorrect." });
-      }
+      await validateGiftCardPin(ctx, card._id, args.pin);
     }
 
     const appliedAmount = roundCurrency(
@@ -1121,8 +1207,8 @@ export const validateForAdmin = internalAction({
     if (availableBalance <= 0) {
       throw new ConvexError({ message: "This gift card has no balance left." });
     }
-    if (card.pin && (!args.pin || args.pin.trim() !== card.pin)) {
-      throw new ConvexError({ message: "That PIN is incorrect." });
+    if (card.pin) {
+      await validateGiftCardPin(ctx, card._id, args.pin);
     }
     return {
       giftCardId: card._id,
@@ -1221,7 +1307,8 @@ export const attachSessionToReservation = internalMutation({
   },
   handler: async (ctx, args) => {
     const reservation = await ctx.db.get(args.reservationId);
-    if (!reservation || reservation.status !== "pending") throw new Error("Gift card reservation is no longer pending");
+    if (!reservation || reservation.status !== "pending")
+      throw new Error("Gift card reservation is no longer pending");
     await ctx.db.patch(args.reservationId, {
       stripeCheckoutSessionId: args.stripeCheckoutSessionId,
       updatedAt: Date.now(),
@@ -2211,8 +2298,10 @@ export const adjustGiftCardBalance = mutation({
     );
     const card = await ctx.db.get(args.giftCardId);
     if (!card) throw new Error("Gift card not found");
-    if (card.status === "voided")
-      throw new Error("Voided cards cannot be adjusted");
+    if (card.status === "voided" || card.status === "pending_payment")
+      throw new Error("Only paid cards can be adjusted");
+    if (card.refundPendingAmount !== undefined)
+      throw new Error("Gift card refund is processing");
     const amount = roundCurrency(args.amount);
     if (amount === 0) return card.balance;
     const balanceAfter = roundCurrency(card.balance + amount);
@@ -2270,5 +2359,60 @@ export const assignGiftCardToCustomer = mutation({
       updatedAt: Date.now(),
     });
     return null;
+  },
+});
+
+// Operator-only, read-only release check. It creates no checkout or monetary
+// value and exposes no webhook signing secret or unrelated account endpoints.
+export const auditStripeWebhookConfiguration = internalAction({
+  args: {},
+  returns: v.object({
+    expectedUrl: v.string(),
+    incomplete: v.boolean(),
+    endpoints: v.array(
+      v.object({
+        id: v.string(),
+        enabled: v.boolean(),
+        liveMode: v.boolean(),
+        missingEvents: v.array(v.string()),
+      }),
+    ),
+  }),
+  handler: async () => {
+    const site = process.env.CONVEX_SITE_URL;
+    if (!site) throw new Error("CONVEX_SITE_URL is required for webhook audit");
+    const expectedUrl = `${site.replace(/\/$/, "")}/stripe/webhook`;
+    const result = await stripeApiCall("webhook_endpoints?limit=100", {
+      method: "GET",
+    });
+    const required = [
+      "checkout.session.completed",
+      "checkout.session.async_payment_succeeded",
+      "checkout.session.expired",
+      "charge.refunded",
+    ];
+    const endpoints = (result.data ?? []) as Array<{
+      id: string;
+      url: string;
+      status: string;
+      livemode: boolean;
+      enabled_events: string[];
+    }>;
+    return {
+      expectedUrl,
+      incomplete: result.has_more === true,
+      endpoints: endpoints
+        .filter((endpoint) => endpoint.url.replace(/\/$/, "") === expectedUrl)
+        .map((endpoint) => ({
+          id: endpoint.id,
+          enabled: endpoint.status === "enabled",
+          liveMode: endpoint.livemode,
+          missingEvents: endpoint.enabled_events.includes("*")
+            ? []
+            : required.filter(
+                (event) => !endpoint.enabled_events.includes(event),
+              ),
+        })),
+    };
   },
 });

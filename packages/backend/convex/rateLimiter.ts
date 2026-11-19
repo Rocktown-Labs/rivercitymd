@@ -60,6 +60,12 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
     capacity: 10,
     shards: 4,
   },
+  giftCardPinByCode: {
+    kind: "token bucket",
+    rate: 5,
+    period: HOUR,
+    capacity: 5,
+  },
   giftCardClaimByUser: {
     kind: "token bucket",
     rate: 10,

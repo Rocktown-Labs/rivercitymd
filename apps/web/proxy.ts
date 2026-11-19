@@ -71,7 +71,9 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
               new URL(getRoleHomePath("admin", readiness.isReady), req.url),
             );
           }
-          return NextResponse.redirect(new URL(getRoleHomePath("client"), req.url));
+          return NextResponse.redirect(
+            new URL(getRoleHomePath("client"), req.url),
+          );
         }
       } catch (error) {
         console.error("Error getting user role on auth route:", error);
@@ -218,8 +220,10 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
       }
     }
 
-    // If we have a valid onboarding status but the route doesn't match, allow access
-    // (handles other protected routes that aren't admin/dashboard specific)
+    // A metadata flag cannot replace backend role verification.
+    if (isAdminRoute(req)) {
+      return NextResponse.redirect(new URL("/dashboard", req.url));
+    }
     return NextResponse.next();
   }
 
@@ -293,8 +297,6 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
     console.error("Error checking user role:", error);
     return NextResponse.redirect(new URL("/onboarding", req.url));
   }
-
-  return NextResponse.next();
 });
 
 export const config = {

@@ -118,6 +118,24 @@ const schema = defineSchema({
     notes: v.optional(v.string()),
   }).index("by_user", ["userId"]),
 
+  vehicleCategoryReconciliations: defineTable({
+    evidenceUrls: v.optional(v.array(v.string())),
+    vehicleId: v.id("vehicles"), issue: v.number(), reconciledAt: v.number(),
+    before: v.object({
+      year: v.optional(v.number()), make: v.optional(v.string()), model: v.optional(v.string()),
+      vehicleTypeId: v.optional(v.id("vehicleTypes")),
+      size: v.optional(v.union(v.literal("small"),v.literal("medium"),v.literal("large"))),
+      classification: v.optional(v.object({
+        source: v.union(v.literal("fuelEconomy"),v.literal("vpic"),v.literal("manual"),v.literal("fallback")),
+        confidence: v.union(v.literal("high"),v.literal("medium"),v.literal("low")),
+        rawCategory:v.optional(v.string()), needsAdminReview:v.boolean(),
+      })),
+    }),
+    action:v.union(v.literal("assigned"),v.literal("flagged")),
+    vehicleTypeId:v.optional(v.id("vehicleTypes")),
+    source:v.union(v.literal("fuelEconomy"),v.literal("vpic"),v.literal("fallback"),v.literal("manual")), rawCategory:v.string(),
+  }).index("by_vehicle",["vehicleId"]),
+
   vehicleTypes: defineTable({
     name: v.string(),
     slug: v.string(),

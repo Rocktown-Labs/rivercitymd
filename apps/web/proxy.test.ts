@@ -54,3 +54,21 @@ test("Google callback is allowed to complete even after Clerk authenticates", as
   expect(result.headers.get("location")).toBeNull();
   expect(fetchQuery).not.toHaveBeenCalled();
 });
+
+test.each([null, "token"])(
+  "an onboarding metadata flag does not grant admin access without a verified role (%s)",
+  async (token) => {
+    fetchQuery.mockResolvedValue(null);
+    const auth = async () => ({
+      ...(await session(token)()),
+      sessionClaims: { metadata: { onboardingComplete: true } },
+    });
+    const result = await run(
+      auth,
+      new NextRequest("https://example.com/admin"),
+    );
+    expect(result.headers.get("location")).toBe(
+      "https://example.com/dashboard",
+    );
+  },
+);

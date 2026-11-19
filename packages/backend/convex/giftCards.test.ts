@@ -1,8 +1,8 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
-import { modules } from "./test.setup";
+import { modules, stripeFetchMock } from "./test.setup";
 import { seedBookingSetup } from "./testUtils/bookingSetup";
 
 async function createUser(
@@ -152,13 +152,13 @@ describe("gift cards", () => {
     });
 
     await expect(
-      asUser.mutation(api.giftCards.claimByCode, {
+      asUser.action(api.giftCards.claimByCode, {
         code: created.code,
         pin: "0000",
       }),
     ).rejects.toThrow(/PIN/);
 
-    await asUser.mutation(api.giftCards.claimByCode, {
+    await asUser.action(api.giftCards.claimByCode, {
       code: created.code,
       pin: "9876",
     });
@@ -299,8 +299,13 @@ describe("gift card booking conversion", () => {
       });
     });
 
-    await t.run(ctx => ctx.db.patch(card._id, { stripePaymentIntentId: "pi_booking_refund" }));
-    await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_booking_refund", refundAmount: 100 });
+    await t.run((ctx) =>
+      ctx.db.patch(card._id, { stripePaymentIntentId: "pi_booking_refund" }),
+    );
+    await t.mutation(internal.giftCards.handlePurchaseRefund, {
+      stripePaymentIntentId: "pi_booking_refund",
+      refundAmount: 100,
+    });
     const converted = await t.mutation(
       internal.bookingDrafts.convertSuccessfulCheckout,
       {
@@ -321,8 +326,11 @@ describe("gift card booking conversion", () => {
     const updatedCard = await t.run(async (ctx) => ctx.db.get(card._id));
     expect(updatedCard?.balance).toBe(60);
     expect(updatedCard?.reservedBalance).toBe(0);
-    await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_booking_refund", refundAmount: 100 });
-    expect((await t.run(ctx => ctx.db.get(card._id)))?.balance).toBe(0);
+    await t.mutation(internal.giftCards.handlePurchaseRefund, {
+      stripePaymentIntentId: "pi_booking_refund",
+      refundAmount: 100,
+    });
+    expect((await t.run((ctx) => ctx.db.get(card._id)))?.balance).toBe(0);
   });
 });
 
@@ -671,7 +679,11 @@ describe("gift card purchase refunds", () => {
     expect(
       transactions.filter((tx) => tx.type === "refund").map((tx) => tx.amount),
     ).toEqual([-40]);
-    expect(transactions.filter(tx => tx.type === "issue" || tx.type === "refund").reduce((sum, tx) => sum + tx.amount, 0)).toBe(60);
+    expect(
+      transactions
+        .filter((tx) => tx.type === "issue" || tx.type === "refund")
+        .reduce((sum, tx) => sum + tx.amount, 0),
+    ).toBe(60);
   });
 
   test("full purchase refund after partial redemption removes remaining spendable credit", async () => {
@@ -787,12 +799,349 @@ test("cumulative purchase refunds are idempotent without pending orders", async 
 
 test("a refunded reservation without a checkout can drain after its hold expires", async () => {
   const t = convexTest(schema, modules);
-  const card = await t.mutation(internal.giftCards.createGiftCard, { amount: 100, deliveryMethod: "self", source: "admin_sale", paymentMethod: "cash", purchaserName: "Buyer" });
-  await t.run(ctx => ctx.db.patch(card._id, { stripePaymentIntentId: "pi_unattached" }));
-  const reservationId = await t.mutation(internal.giftCards.reserveForOrder, { giftCardId: card._id, amount: 30, orderType: "booking", orderId: "failed_checkout", expiresAt: Date.now() - 1 });
-  await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_unattached", refundAmount: 100 });
-  await t.mutation(internal.giftCards.releaseUnattachedRefundReservation, { reservationId });
-  await t.mutation(internal.giftCards.handlePurchaseRefund, { stripePaymentIntentId: "pi_unattached", refundAmount: 100 });
-  expect((await t.run(ctx => ctx.db.get(card._id)))?.status).toBe("voided");
-  await expect(t.mutation(internal.giftCards.attachSessionToReservation, { reservationId, stripeCheckoutSessionId: "cs_too_late" })).rejects.toThrow(/no longer pending/);
+  const card = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "self",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+  });
+  await t.run((ctx) =>
+    ctx.db.patch(card._id, { stripePaymentIntentId: "pi_unattached" }),
+  );
+  const reservationId = await t.mutation(internal.giftCards.reserveForOrder, {
+    giftCardId: card._id,
+    amount: 30,
+    orderType: "booking",
+    orderId: "failed_checkout",
+    expiresAt: Date.now() - 1,
+  });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, {
+    stripePaymentIntentId: "pi_unattached",
+    refundAmount: 100,
+  });
+  await t.mutation(internal.giftCards.releaseUnattachedRefundReservation, {
+    reservationId,
+  });
+  await t.mutation(internal.giftCards.handlePurchaseRefund, {
+    stripePaymentIntentId: "pi_unattached",
+    refundAmount: 100,
+  });
+  expect((await t.run((ctx) => ctx.db.get(card._id)))?.status).toBe("voided");
+  await expect(
+    t.mutation(internal.giftCards.attachSessionToReservation, {
+      reservationId,
+      stripeCheckoutSessionId: "cs_too_late",
+    }),
+  ).rejects.toThrow(/no longer pending/);
+});
+
+test("a signed-in buyer does not claim a gift before its new recipient joins", async () => {
+  const t = convexTest(schema, modules);
+  const buyer = await createUser(t, {
+    name: "Buyer",
+    email: "buyer@example.com",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "email",
+    source: "purchase",
+    paymentMethod: "stripe",
+    purchaserUserId: buyer,
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@example.com",
+    recipientEmail: "new@example.com",
+  });
+  await t.mutation(internal.giftCards.attachCheckoutSession, {
+    giftCardId: gift._id,
+    stripeCheckoutSessionId: "cs_gift",
+  });
+  await t.mutation(internal.giftCards.activateFromCheckout, {
+    stripeCheckoutSessionId: "cs_gift",
+    stripePaymentIntentId: "pi_gift",
+  });
+  expect(
+    (await t.run((ctx) => ctx.db.get(gift._id)))?.claimedByUserId,
+  ).toBeUndefined();
+  const recipient = await createUser(t, {
+    name: "Recipient",
+    email: "new@example.com",
+  });
+  await t
+    .withIdentity({ subject: recipient, email: "new@example.com" })
+    .mutation(api.giftCards.claimByToken, { token: gift.claimToken! });
+  expect((await t.run((ctx) => ctx.db.get(gift._id)))?.claimedByUserId).toBe(
+    recipient,
+  );
+});
+
+test("an unpaid card cannot be activated through a balance adjustment", async () => {
+  const t = convexTest(schema, modules);
+  const admin = await createUser(t, {
+    name: "Admin",
+    email: "admin@example.com",
+    role: "admin",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "purchase",
+    paymentMethod: "stripe",
+    purchaserName: "Buyer",
+  });
+  await expect(
+    t
+      .withIdentity({ subject: admin, email: "admin@example.com" })
+      .mutation(api.giftCards.adjustGiftCardBalance, {
+        giftCardId: gift._id,
+        amount: 100,
+        note: "test",
+      }),
+  ).rejects.toThrow("Only paid cards");
+  expect((await t.run((ctx) => ctx.db.get(gift._id)))?.status).toBe(
+    "pending_payment",
+  );
+});
+
+test("failed PIN attempts stay rate-limited across transactions", async () => {
+  const t = convexTest(schema, modules);
+  const user = await createUser(t, {
+    name: "Recipient",
+    email: "pin@test.invalid",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+    pin: "4321",
+  });
+  const asUser = t.withIdentity({ subject: user, email: "pin@test.invalid" });
+  for (let i = 0; i < 5; i++)
+    await expect(
+      asUser.action(api.giftCards.claimByCode, {
+        code: gift.code,
+        pin: "0000",
+      }),
+    ).rejects.toThrow("PIN is incorrect");
+  await expect(
+    asUser.action(api.giftCards.claimByCode, { code: gift.code, pin: "4321" }),
+  ).rejects.toThrow(/Too many attempts/);
+  expect(
+    (await t.run((ctx) => ctx.db.get(gift._id)))?.claimedByUserId,
+  ).toBeUndefined();
+});
+
+test("checkout rejects an untrusted return host before creating a card", async () => {
+  const t = convexTest(schema, modules);
+  await expect(
+    t.action(api.giftCards.createPurchase, {
+      amount: 100,
+      deliveryMethod: "self",
+      purchaserName: "Buyer",
+      purchaserEmail: "buyer@test.invalid",
+      origin: "https://evil.example",
+    }),
+  ).rejects.toThrow("Checkout must return");
+  expect(await t.run((ctx) => ctx.db.query("giftCards").take(1))).toHaveLength(
+    0,
+  );
+});
+
+test("online purchase remains unpaid until fulfillment and duplicate fulfillment issues credit once", async () => {
+  const t = convexTest(schema, modules);
+  await t.run((ctx) =>
+    ctx.db.insert("businessInfo", {
+      name: "River City",
+      owner: "Owner",
+      address: "Street",
+      cityStateZip: "City",
+      country: "US",
+      giftCardProductId: "prod_gift",
+    }),
+  );
+  const purchase = await t.action(api.giftCards.createPurchase, {
+    amount: 100,
+    deliveryMethod: "print",
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@test.invalid",
+    origin: "https://www.rivercitymd.com",
+  });
+  expect(purchase.url).toBe("https://checkout.stripe.com/test");
+  const pending = await t.run((ctx) => ctx.db.get(purchase.giftCardId));
+  expect(pending).toMatchObject({
+    status: "pending_payment",
+    balance: 0,
+    stripeCheckoutSessionId: "cs_test_123",
+  });
+  await t.mutation(internal.giftCards.activateFromCheckout, {
+    stripeCheckoutSessionId: "cs_test_123",
+    stripePaymentIntentId: "pi_gift",
+  });
+  await t.mutation(internal.giftCards.activateFromCheckout, {
+    stripeCheckoutSessionId: "cs_test_123",
+    stripePaymentIntentId: "pi_gift",
+  });
+  expect((await t.run((ctx) => ctx.db.get(purchase.giftCardId)))?.balance).toBe(
+    100,
+  );
+  const ledger = await t.run((ctx) =>
+    ctx.db
+      .query("giftCardTransactions")
+      .withIndex("by_gift_card", (q) => q.eq("giftCardId", purchase.giftCardId))
+      .take(10),
+  );
+  expect(ledger.filter((t) => t.type === "issue")).toHaveLength(1);
+});
+
+test("legitimate owners can validate a card repeatedly without consuming PIN attempts", async () => {
+  const t = convexTest(schema, modules);
+  const owner = await createUser(t, {
+    name: "Owner",
+    email: "owner@test.invalid",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "self",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Owner",
+    purchaserUserId: owner,
+    purchaserEmail: "owner@test.invalid",
+    pin: "4321",
+  });
+  const asOwner = t.withIdentity({
+    subject: owner,
+    email: "owner@test.invalid",
+  });
+  for (let i = 0; i < 7; i++)
+    expect(
+      (
+        await asOwner.action(api.giftCards.validateForBooking, {
+          code: gift.code,
+          orderAmount: 10,
+        })
+      ).appliedAmount,
+    ).toBe(10);
+});
+
+test("webhook audit is read-only and identifies missing required gift-card events without leaking other endpoint data", async () => {
+  vi.stubEnv("CONVEX_SITE_URL", "https://app.convex.site");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL, options?: RequestInit) => {
+      expect(options?.method).toBe("GET");
+      expect(new URL(String(url)).pathname).toBe("/v1/webhook_endpoints");
+      return Response.json({
+        has_more: false,
+        data: [
+          {
+            id: "we_app",
+            url: "https://app.convex.site/stripe/webhook",
+            status: "enabled",
+            livemode: true,
+            enabled_events: ["checkout.session.completed"],
+          },
+          {
+            id: "we_other",
+            url: "https://other.example/secret",
+            status: "enabled",
+            livemode: true,
+            enabled_events: ["*"],
+          },
+        ],
+      });
+    }),
+  );
+  const t = convexTest(schema, modules);
+  const result = await t.action(
+    internal.giftCards.auditStripeWebhookConfiguration,
+    {},
+  );
+  expect(result.endpoints).toHaveLength(1);
+  expect(result.endpoints[0].missingEvents).toContain("charge.refunded");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.stubGlobal("fetch", vi.fn(stripeFetchMock));
+});
+
+test("successful recipient and admin revalidations leave the PIN budget available for claiming", async () => {
+  const t = convexTest(schema, modules);
+  const user = await createUser(t, {
+    name: "Recipient",
+    email: "recipient@pin.invalid",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@pin.invalid",
+    pin: "4321",
+  });
+  for (let i = 0; i < 8; i++) {
+    expect(
+      (
+        await t.action(api.giftCards.validateForBooking, {
+          code: gift.code,
+          pin: "4321",
+          orderAmount: 10 + i,
+        })
+      ).appliedAmount,
+    ).toBe(10 + i);
+    expect(
+      (
+        await t.action(internal.giftCards.validateForAdmin, {
+          code: gift.code,
+          pin: "4321",
+        })
+      ).availableBalance,
+    ).toBe(100);
+  }
+  const asUser = t.withIdentity({
+    subject: user,
+    email: "recipient@pin.invalid",
+  });
+  expect(
+    await asUser.action(api.giftCards.claimByCode, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).toBe(gift._id);
+});
+
+test("failed validation PIN guesses persist and block even correct guesses after exhaustion", async () => {
+  const t = convexTest(schema, modules);
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@pin.invalid",
+    pin: "4321",
+  });
+  for (let i = 0; i < 5; i++)
+    await expect(
+      t.action(api.giftCards.validateForBooking, {
+        code: gift.code,
+        pin: "0000",
+      }),
+    ).rejects.toThrow("PIN is incorrect");
+  await expect(
+    t.action(api.giftCards.validateForBooking, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).rejects.toThrow("Too many attempts");
+  await expect(
+    t.action(internal.giftCards.validateForAdmin, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).rejects.toThrow("Too many attempts");
 });
