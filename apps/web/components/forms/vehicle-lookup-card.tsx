@@ -614,7 +614,7 @@ export function VehicleLookupCard({
                   )}
                   {suggestions[0]?.matchedTrim && (
                     <p className="px-3 py-2 text-xs text-muted-foreground">
-                      {suggestions[0].matchedTrim} is a trim. Choose your vehicle’s model below; trim availability varies by year.
+                      {suggestions[0].matchedTrim} can match several vehicles. Choose your model and body below; trim availability varies by year.
                     </p>
                   )}
                   {suggestions.map((suggestion) => (

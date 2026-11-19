@@ -148,7 +148,7 @@ export const flagBatch = internalMutation({
       await ctx.db.patch(vehicle._id, {
         classification: {
           source,
-          confidence: vehicle.classification?.confidence ?? "low",
+          confidence: "low",
           rawCategory: vehicle.classification?.rawCategory ?? record.reason,
           needsAdminReview: true,
         },

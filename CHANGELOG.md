@@ -4,7 +4,7 @@ All notable changes to the River City Mobile Detailing project are documented in
 
 ## [v0.1.6] - 2026-11-19
 ### Fixed
-- Match canonical vehicle models across punctuation and drivetrain variants; require category agreement and use typed vPIC evidence for heavy-duty vehicles.
+- Support model/body choices for trim-only and free-form searches across makes, including commercial cab/chassis; match canonical vehicle models across punctuation and drivetrain variants; require category agreement and use typed vPIC evidence for heavy-duty vehicles.
 - Preserve gift recipients when a signed-in purchaser sends a card; restrict checkout return origins, persist PIN attempt limits, and prevent unpaid balance activation.
 - Redirect the production hosting alias to the Clerk-authorized domain and require verified roles for admin routing.
 ### Added

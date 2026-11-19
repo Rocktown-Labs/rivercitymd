@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 // Access tokens appear in checkout return URLs. Never send them to an
 // arbitrary caller-supplied origin. Development/preview origins are explicit.
 export function validateGiftCardOrigin(value: string) {
@@ -10,13 +11,22 @@ export function validateGiftCardOrigin(value: string) {
       ...(process.env.GIFT_CARD_ALLOWED_ORIGINS ?? "").split(","),
     ]
       .filter((origin): origin is string => Boolean(origin?.trim()))
-      .map((origin) => new URL(origin.trim()).origin),
+      .map((origin) => {
+        try {
+          return new URL(origin.trim()).origin;
+        } catch {
+          throw new ConvexError({
+            message:
+              "Gift card return origins are misconfigured. Contact the administrator.",
+          });
+        }
+      }),
   ]);
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Error("Invalid checkout origin");
+    throw new ConvexError({ message: "Invalid checkout origin" });
   }
   if (
     !allowed.has(url.origin) ||
@@ -28,7 +38,9 @@ export function validateGiftCardOrigin(value: string) {
         ["localhost", "127.0.0.1"].includes(url.hostname)
       ))
   ) {
-    throw new Error("Checkout must return to the River City website");
+    throw new ConvexError({
+      message: "Checkout must return to the River City website",
+    });
   }
   return url.origin;
 }

@@ -17,6 +17,7 @@ export function normalizeVehicleModel(model: string) {
     .toLowerCase()
     .replace(/\b(awd|4wd|2wd|fwd|rwd|4x4|2x4)\b/g, " ")
     .replace(/[^a-z0-9]+/g, " ")
+    .replace(/([a-z])\s+(?=\d)/g, "$1")
     .trim()
     .replace(/\s+/g, " ");
 }
@@ -29,8 +30,12 @@ export function vehicleModelsMatch(input: string, candidate: string) {
   return a.startsWith(`${b} `) || b.startsWith(`${a} `);
 }
 
-export function normalizeVehicleInput(make: string, model: string) {
-  const canonicalMake = normalizeVehicleMake(make);
+export function normalizeVehicleInput(
+  make: string,
+  model: string,
+  year?: number,
+) {
+  let canonicalMake = normalizeVehicleMake(make);
   let canonicalModel = model.trim();
   if (
     make.trim().toLowerCase() === "range rover" &&
@@ -40,6 +45,15 @@ export function normalizeVehicleInput(make: string, model: string) {
   }
   if (canonicalMake.toLowerCase() === "mercedes-benz") {
     canonicalModel = canonicalModel.replace(/^benz\s+/i, "");
+  }
+  if (
+    year &&
+    year >= 2011 &&
+    canonicalMake.toLowerCase() === "dodge" &&
+    /^ram\s+(1500|2500|3500)\b/i.test(canonicalModel)
+  ) {
+    canonicalMake = "Ram";
+    canonicalModel = canonicalModel.replace(/^ram\s+/i, "");
   }
   return { make: canonicalMake, model: canonicalModel };
 }

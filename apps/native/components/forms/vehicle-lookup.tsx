@@ -370,7 +370,7 @@ export function VehicleLookup({
                     <View className="rounded-2xl border border-border bg-card p-1 shadow-lg">
                       {suggestions[0]?.matchedTrim ? (
                         <Text className="px-3 py-2 text-xs text-muted-foreground">
-                          {suggestions[0].matchedTrim} is a trim. Choose your vehicle’s model below; trim availability varies by year.
+                          {suggestions[0].matchedTrim} can match several vehicles. Choose your model and body below; trim availability varies by year.
                         </Text>
                       ) : null}
                       {suggestions.slice(0, 6).map((item, index) => (

@@ -672,11 +672,7 @@ test.each([
     const results = await t.action(api.vehicleTypes.searchModels, { query });
     expect(results.length).toBeGreaterThan(0);
     expect(results.every((r) => r.make === "GMC" && r.matchedTrim)).toBe(true);
-    expect(
-      results.some(
-        (r) => r.model.includes("Cab Chassis") || r.model === "Savana",
-      ),
-    ).toBe(false);
+    expect(results.some((r) => r.model === "Savana")).toBe(false);
     if (!query.toLowerCase().includes("elevation"))
       expect(results.map((r) => r.model)).toContain("Yukon 2WD");
     const classified = await t.action(api.vehicleTypes.classify, {
@@ -713,4 +709,86 @@ test("the broad vPIC Truck type does not silently classify a cargo van as a pick
   });
   expect(result.vehicleTypeId).toBeUndefined();
   expect(result.needsAdminReview).toBe(true);
+});
+
+test("an unknown trim on any recognized make recovers to selectable model/body options, including commercial bodies", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({
+          menuItem: { text: "Chevrolet", value: "Chevrolet" },
+        });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Silverado 2WD", value: "Silverado 2WD" },
+            {
+              text: "Silverado Cab Chassis 2WD",
+              value: "Silverado Cab Chassis 2WD",
+            },
+          ],
+        });
+      return Response.json({ Results: [] });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.searchModels, {
+    query: "2024 Chevrolet Custom Fleet Trim",
+  });
+  expect(result.map((r) => r.model)).toContain("Silverado Cab Chassis 2WD");
+  expect(result.every((r) => r.matchedTrim)).toBe(true);
+});
+
+test.each([
+  ["2024 STX", "Ford", "F-150"],
+  ["2024 SR5", "Toyota", "Tundra"],
+  ["2024 LTZ", "Chevrolet", "Silverado Cab Chassis 2WD"],
+  ["2024 Long Range", "Tesla", "Model 3"],
+])("trim-only hints work across makes: %s", async (query, make, model) => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: make, value: make } });
+      if (u.includes("/menu/model"))
+        return Response.json({ menuItem: { text: model, value: model } });
+      return Response.json({ Results: [] });
+    }),
+  );
+  expect(
+    (await t.action(api.vehicleTypes.searchModels, { query })).map(
+      (r) => r.model,
+    ),
+  ).toContain(model);
+});
+
+test("a matching commercial vPIC model outranks broad passenger-model recovery choices", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({ menuItem: { text: "Ford", value: "Ford" } });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "Mustang", value: "Mustang" },
+            { text: "Escape AWD", value: "Escape AWD" },
+            { text: "Explorer AWD", value: "Explorer AWD" },
+          ],
+        });
+      return Response.json({
+        Results: [{ Make_Name: "FORD", Model_Name: "F-250" }],
+      });
+    }),
+  );
+  const results = await t.action(api.vehicleTypes.searchModels, {
+    query: "2025 Ford F250",
+  });
+  expect(results.map((r) => r.model)).toEqual(["F-250"]);
 });
