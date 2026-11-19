@@ -147,10 +147,10 @@ Verified fixes: a signed-in purchaser sending a gift no longer becomes its claim
 
 OCR scan succeeded using the configured Cloudflare model. Confirmed high-impact findings (checkout origin, admin role verification, failed PIN attempts, unpaid adjustments) were addressed. Public access links intentionally let purchasers print the gift code/PIN: that bearer-link behavior is retained, while untrusted checkout return origins are rejected. General pagination/refactoring suggestions are separate from these incident fixes.
 
-Development rehearsal: the initial pass updated 69 available records and flagged 18 previously unflagged records. After the final input refinements, a repeated pass updated two more records; already-resolved and unavailable records were safely skipped. The older development snapshot does not contain every newer production vehicle. Unit tests separately cover before-images, repeated runs, stale identities and manual overrides.
+Development rehearsal: the initial pass updated 69 available records and flagged 18 previously unflagged records. After the final input refinements, a repeated pass updated two more records; already-resolved and unavailable records were safely skipped. The expanded research rehearsal updated ten additional available records (including identity spelling fixes), safely skipping resolved, changed, or missing records. The older development snapshot does not contain every newer production vehicle. Unit tests separately cover before-images, repeated runs, stale identities and manual overrides.
 
 Owner confirmation is tracked in [#212](https://github.com/Rocktown-Labs/rivercitymd/issues/212).
 
 ## Production outcome
 
-Prepared 85 high-confidence category corrections and 24 manual-review records. Pending release and guarded batch application. Manual-review records must remain flagged until a reliable category is available or Dustin confirms the actual vehicle. Janet/Randy's corrected recurring rates and paid invoices must remain unchanged.
+Prepared 101 reviewed category/identity corrections and seven current owner confirmations, plus a deleted historical Audi to skip. Pending release and guarded batch application. Manual-review records must remain flagged until a reliable category is available or Dustin confirms the actual vehicle. Janet/Randy's corrected recurring rates and paid invoices must remain unchanged.

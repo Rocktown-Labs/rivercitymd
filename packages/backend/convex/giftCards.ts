@@ -1058,28 +1058,52 @@ export const revealGiftCardCode = query({
   },
 });
 
-// Correct revalidations must not consume guesses, but an exhausted budget
-// must be checked before comparing even a correct PIN to prevent brute-force
-// callers from probing past the limit. Failed guesses commit independently.
+// Return failed guesses instead of throwing so their attempt counters commit.
+// The component and PIN check share a transaction to serialize concurrent guesses.
+export const validatePinInternal = internalMutation({
+  args: { giftCardId: v.id("giftCards"), pin: v.optional(v.string()) },
+  returns: v.object({
+    valid: v.boolean(),
+    limited: v.boolean(),
+    retryAfter: v.optional(v.number()),
+  }),
+  handler: async (ctx, args) => {
+    const card = await ctx.db.get(args.giftCardId);
+    if (!card || card.status !== "active") return { valid: false, limited: false };
+    if (!card.pin) return { valid: true, limited: false };
+    const key = normalizeGiftCardCode(card.code);
+    const available = await rateLimiter.check(ctx, "giftCardPinByCode", { key });
+    if (!available.ok) {
+      return { valid: false, limited: true, retryAfter: available.retryAfter };
+    }
+    if (args.pin?.trim() === card.pin) return { valid: true, limited: false };
+    const consumed = await rateLimiter.limit(ctx, "giftCardPinByCode", { key });
+    return {
+      valid: false,
+      limited: !consumed.ok,
+      ...(!consumed.ok ? { retryAfter: consumed.retryAfter } : {}),
+    };
+  },
+});
+
 async function validateGiftCardPin(
   ctx: ActionCtx,
-  code: string,
-  expectedPin: string,
-  suppliedPin?: string,
+  giftCardId: Id<"giftCards">,
+  pin?: string,
 ) {
-  const key = normalizeGiftCardCode(code);
-  const status = await rateLimiter.check(ctx, "giftCardPinByCode", { key });
-  if (!status.ok)
+  const result = await ctx.runMutation(internal.giftCards.validatePinInternal, {
+    giftCardId,
+    pin,
+  });
+  if (result.limited) {
     throw new ConvexError({
       code: "RATE_LIMITED",
       message: "Too many attempts. Please wait a moment and try again.",
-      retryAfter: status.retryAfter,
+      retryAfter: result.retryAfter,
       limit: "giftCardPinByCode",
     });
-  if (!suppliedPin || suppliedPin.trim() !== expectedPin) {
-    await assertRateLimit(ctx, "giftCardPinByCode", { key });
-    throw new ConvexError({ message: "That PIN is incorrect." });
   }
+  if (!result.valid) throw new ConvexError({ message: "That PIN is incorrect." });
 }
 
 export const validateForBooking = action({
@@ -1134,7 +1158,7 @@ export const validateForBooking = action({
       });
     }
     if (card.pin && !claimedByCurrentUser) {
-      await validateGiftCardPin(ctx,args.code,card.pin,args.pin);
+      await validateGiftCardPin(ctx, card._id, args.pin);
     }
 
     const appliedAmount = roundCurrency(
@@ -1184,7 +1208,7 @@ export const validateForAdmin = internalAction({
       throw new ConvexError({ message: "This gift card has no balance left." });
     }
     if (card.pin) {
-      await validateGiftCardPin(ctx,args.code,card.pin,args.pin);
+      await validateGiftCardPin(ctx, card._id, args.pin);
     }
     return {
       giftCardId: card._id,
