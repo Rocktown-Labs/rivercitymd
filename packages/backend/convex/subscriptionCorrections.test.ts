@@ -141,12 +141,18 @@ test("future-only correction verifies Stripe, preserves paid invoices, and captu
   const posts: URLSearchParams[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_url: string, options?: RequestInit) => {
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (new URL(url).pathname === "/v1/products/prod_club")
+        return Response.json({ id: "prod_club", active: true });
       if (options?.method === "POST") {
         const body = new URLSearchParams(String(options.body));
         posts.push(body);
         expect(body.get("proration_behavior")).toBe("none");
-        expect([...body.keys()].some(key => key.startsWith("billing_cycle_anchor"))).toBe(false);
+        expect(
+          [...body.keys()].some((key) =>
+            key.startsWith("billing_cycle_anchor"),
+          ),
+        ).toBe(false);
         expect(body.get("items[0][price_data][unit_amount]")).toBe("14500");
         current = stripeSubscription(14500, "price_new");
       }
@@ -208,4 +214,59 @@ test("an unexpected Stripe price stops the correction without local changes", as
   expect(
     (await t.run((ctx) => ctx.db.get(args.vehicleId)))?.vehicleTypeId,
   ).toBeUndefined();
+});
+
+test("archived products stay archived while a retry-safe active replacement receives the corrected rate", async () => {
+  const { t, args } = await setup();
+  let current = stripeSubscription(16500, "price_old");
+  let productsCreated = 0;
+  let ratesChanged = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/products/prod_club")
+        return Response.json({
+          id: "prod_club",
+          active: false,
+          tax_code: "txcd_10000000",
+        });
+      if (path === "/v1/products") {
+        productsCreated++;
+        expect(new URLSearchParams(String(options?.body)).get("tax_code")).toBe(
+          "txcd_10000000",
+        );
+        expect(
+          (options?.headers as Record<string, string>)["Idempotency-Key"],
+        ).toContain("club-rate-product-208-");
+        return Response.json({ id: "prod_replacement", active: true });
+      }
+      if (options?.method === "POST") {
+        expect(path).toBe("/v1/subscriptions/sub_club");
+        const body = new URLSearchParams(String(options.body));
+        expect(body.get("items[0][price_data][product]")).toBe(
+          "prod_replacement",
+        );
+        expect(body.get("proration_behavior")).toBe("none");
+        expect(body.has("billing_cycle_anchor")).toBe(false);
+        expect(
+          (options.headers as Record<string, string>)["Idempotency-Key"],
+        ).toContain("v2-");
+        ratesChanged++;
+        current = stripeSubscription(14500, "price_new");
+      }
+      return Response.json(current);
+    }),
+  );
+  const result = await t.action(internal.subscriptionCorrections.reconcile, {
+    ...args,
+    apply: true,
+  });
+  expect(result.stripePriceAfter).toBe(145);
+  await t.action(internal.subscriptionCorrections.reconcile, {
+    ...args,
+    apply: true,
+  });
+  expect(productsCreated).toBe(1);
+  expect(ratesChanged).toBe(1);
 });

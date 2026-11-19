@@ -37,7 +37,13 @@ async function buildPlan(
   ctx: Pick<QueryCtx, "db">,
   args: Correction,
 ): Promise<Plan> {
-  if (!Number.isFinite(args.expectedOldPrice) || args.expectedOldPrice <= 0 || !Number.isFinite(args.expectedNewPrice) || args.expectedNewPrice <= 0) throw new Error("Only positive paid-plan rates are supported");
+  if (
+    !Number.isFinite(args.expectedOldPrice) ||
+    args.expectedOldPrice <= 0 ||
+    !Number.isFinite(args.expectedNewPrice) ||
+    args.expectedNewPrice <= 0
+  )
+    throw new Error("Only positive paid-plan rates are supported");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(args.today))
     throw new Error("An effective date is required");
   const sub = await ctx.db.get(args.subscriptionId);
@@ -290,13 +296,43 @@ export const reconcile = internalAction({
           ? item.price.product
           : item.price.product?.id;
       if (!product) throw new Error("Stripe product is missing");
+      const previousProduct = await stripeApiCall(
+        `products/${encodeURIComponent(product)}`,
+        { method: "GET" },
+      );
+      let activeProduct = product;
+      if (previousProduct.deleted || previousProduct.active !== true) {
+        // Retired checkout products must stay retired. A dedicated replacement
+        // lets the existing subscription receive its corrected rate safely.
+        const productBody = new URLSearchParams({
+          name: `River City Maintenance Club (${plan.vehicleTypeName})`,
+          "metadata[subscriptionId]": plan.subscriptionId,
+          "metadata[serviceId]": plan.serviceId,
+          "metadata[reason]": "vehicle-category-rate-correction-208",
+        });
+        const taxCode =
+          typeof previousProduct.tax_code === "string"
+            ? previousProduct.tax_code
+            : previousProduct.tax_code?.id;
+        if (taxCode) productBody.set("tax_code", taxCode);
+        const replacement = await stripeApiCall("products", {
+          method: "POST",
+          body: productBody,
+          headers: {
+            "Idempotency-Key": `club-rate-product-208-${plan.subscriptionId}`,
+          },
+        });
+        if (!replacement.id || replacement.active !== true)
+          throw new Error("Replacement Stripe product could not be verified");
+        activeProduct = replacement.id;
+      }
       // Keep the same paid monthly cadence. Omitting the anchor update
       // preserves it on both pre-Endive and Endive API versions; the explicit
       // anchor parameter changed format in Endive. Verify it again below.
       const body = new URLSearchParams({
         "items[0][id]": item.id,
         "items[0][quantity]": "1",
-        "items[0][price_data][product]": product,
+        "items[0][price_data][product]": activeProduct,
         "items[0][price_data][currency]": "usd",
         "items[0][price_data][unit_amount]": String(
           Math.round(plan.newPrice * 100),
@@ -304,11 +340,16 @@ export const reconcile = internalAction({
         "items[0][price_data][recurring][interval]": "month",
         proration_behavior: "none",
       });
+      if (
+        item.price.tax_behavior === "inclusive" ||
+        item.price.tax_behavior === "exclusive"
+      )
+        body.set("items[0][price_data][tax_behavior]", item.price.tax_behavior);
       await stripeApiCall(endpoint, {
         method: "POST",
         body,
         headers: {
-          "Idempotency-Key": `club-rate-208-${plan.subscriptionId}-${Math.round(plan.newPrice * 100)}`,
+          "Idempotency-Key": `club-rate-208-v2-${plan.subscriptionId}-${Math.round(plan.newPrice * 100)}-${activeProduct}`,
         },
       });
       const verified = await stripeApiCall(endpoint, { method: "GET" });
