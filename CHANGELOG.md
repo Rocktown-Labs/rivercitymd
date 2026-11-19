@@ -2,6 +2,10 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v0.1.5] - 2026-11-19
+### Fixed
+- Correct existing club rates whose original Stripe checkout product was archived by using an idempotent active replacement, preserving tax treatment, billing dates, and paid history.
+
 ## [v0.1.4] - 2026-11-18
 ### Fixed
 - Use vehicle category prices consistently for Maintenance Club enrollment and require a category when legacy sizes cannot identify the rate.
