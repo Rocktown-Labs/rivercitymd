@@ -33,6 +33,7 @@ import {
   normalizeGiftCardEmail,
   roundCurrency,
 } from "./lib/giftCards";
+import { validateGiftCardOrigin } from "./lib/giftCardOrigin";
 import { stripeApiCall } from "./lib/stripeApi";
 
 const deliveryMethodValidator = v.union(
@@ -121,6 +122,7 @@ async function createCheckoutSessionForGiftCard(
   card: Doc<"giftCards">,
   origin: string,
 ): Promise<{ sessionId: string; url: string }> {
+  origin = validateGiftCardOrigin(origin);
   const productId: string = await ctx.runAction(
     internal.giftCards.ensureGiftCardProduct,
     {},
@@ -211,6 +213,7 @@ export const createPurchase = action({
     ctx,
     args,
   ): Promise<{ giftCardId: Id<"giftCards">; url: string }> => {
+    validateGiftCardOrigin(args.origin);
     validatePurchaseInput(args);
     await assertRateLimit(ctx, "giftCardPurchaseGlobal", {
       message:
@@ -347,8 +350,9 @@ export const createGiftCard = internalMutation({
     const status =
       args.paymentMethod === "stripe" ? "pending_payment" : "active";
 
-    let claimedByUserId = args.purchaserUserId;
-    let claimedAt = args.purchaserUserId ? now : undefined;
+    // Buying a gift does not make the buyer its recipient.
+    let claimedByUserId = args.deliveryMethod === "self" ? args.purchaserUserId : undefined;
+    let claimedAt = claimedByUserId ? now : undefined;
     if (recipientEmail) {
       const matchingUser = await ctx.db
         .query("users")
@@ -814,7 +818,21 @@ export const claimByToken = mutation({
   },
 });
 
-export const claimByCode = mutation({
+// Rate limiting must commit in its own action transaction so a failed PIN
+// check cannot roll the attempt counter back with the claim mutation.
+export const claimByCode = action({
+  args: { code: v.string(), pin: v.optional(v.string()) },
+  returns: v.id("giftCards"),
+  handler: async (ctx, args): Promise<Id<"giftCards">> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError({ message: "Sign in to claim this gift card." });
+    await assertRateLimit(ctx, "giftCardClaimByUser", { key: identity.subject });
+    await assertRateLimit(ctx, "giftCardPinByCode", { key: normalizeGiftCardCode(args.code) });
+    return await ctx.runMutation(internal.giftCards.claimByCodeInternal, args);
+  },
+});
+
+export const claimByCodeInternal = internalMutation({
   args: {
     code: v.string(),
     pin: v.optional(v.string()),
@@ -1043,6 +1061,7 @@ export const validateForBooking = action({
     requiresPin: boolean;
     claimedByCurrentUser: boolean;
   }> => {
+    await assertRateLimit(ctx, "giftCardPinByCode", { key: normalizeGiftCardCode(args.code) });
     const card: Doc<"giftCards"> | null = await ctx.runQuery(
       internal.giftCards.getByCodeInternal,
       {
@@ -1107,6 +1126,7 @@ export const validateForAdmin = internalAction({
     codeLast4: string;
     availableBalance: number;
   }> => {
+    await assertRateLimit(ctx, "giftCardPinByCode", { key: normalizeGiftCardCode(args.code) });
     const card: Doc<"giftCards"> | null = await ctx.runQuery(
       internal.giftCards.getByCodeInternal,
       {
@@ -2211,8 +2231,10 @@ export const adjustGiftCardBalance = mutation({
     );
     const card = await ctx.db.get(args.giftCardId);
     if (!card) throw new Error("Gift card not found");
-    if (card.status === "voided")
-      throw new Error("Voided cards cannot be adjusted");
+    if (card.status === "voided" || card.status === "pending_payment")
+      throw new Error("Only paid cards can be adjusted");
+    if (card.refundPendingAmount !== undefined)
+      throw new Error("Gift card refund is processing");
     const amount = roundCurrency(args.amount);
     if (amount === 0) return card.balance;
     const balanceAfter = roundCurrency(card.balance + amount);

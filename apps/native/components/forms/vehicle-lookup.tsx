@@ -75,6 +75,7 @@ export function VehicleLookup({
       model: string;
       label: string;
       source: "fuelEconomy" | "vpic";
+      matchedTrim?: string;
     }>
   >([]);
   const [isSearching, setIsSearching] = React.useState(false);
@@ -367,6 +368,11 @@ export function VehicleLookup({
                   {/* Suggestions List */}
                   {suggestions.length > 0 ? (
                     <View className="rounded-2xl border border-border bg-card p-1 shadow-lg">
+                      {suggestions[0]?.matchedTrim ? (
+                        <Text className="px-3 py-2 text-xs text-muted-foreground">
+                          {suggestions[0].matchedTrim} is a trim. Choose your vehicle’s model below; trim availability varies by year.
+                        </Text>
+                      ) : null}
                       {suggestions.slice(0, 6).map((item, index) => (
                         <Pressable
                           key={`${item.year}-${item.make}-${item.model}-${index}`}

@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { useUser } from "@clerk/nextjs";
 import { CheckCircle2, Gift, Loader2, LockKeyhole, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
@@ -21,7 +21,7 @@ export function GiftCardClaimClient() {
   const codeParam = searchParams.get("code") ?? "";
   const { isLoaded, isSignedIn, user } = useUser();
   const claimByToken = useMutation(api.giftCards.claimByToken);
-  const claimByCode = useMutation(api.giftCards.claimByCode);
+  const claimByCode = useAction(api.giftCards.claimByCode);
 
   const context = useQuery(
     api.giftCards.getByClaimToken,

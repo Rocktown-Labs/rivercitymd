@@ -2,6 +2,14 @@
 
 All notable changes to the River City Mobile Detailing project are documented in this file, structured by releases and version numbers derived from the repository's git commit history.
 
+## [v0.1.6] - 2026-11-19
+### Fixed
+- Match canonical vehicle models across punctuation and drivetrain variants; require category agreement and use typed vPIC evidence for heavy-duty vehicles.
+- Preserve gift recipients when a signed-in purchaser sends a card; restrict checkout return origins, persist PIN attempt limits, and prevent unpaid balance activation.
+- Redirect the production hosting alias to the Clerk-authorized domain and require verified roles for admin routing.
+### Added
+- Guarded vehicle reconciliation with before-image audit records and a documented review of all affected production vehicle inputs.
+
 ## [v0.1.5] - 2026-11-19
 ### Fixed
 - Correct existing club rates whose original Stripe checkout product was archived by using an idempotent active replacement, preserving tax treatment, billing dates, and paid history.

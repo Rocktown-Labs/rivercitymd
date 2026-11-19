@@ -1,3 +1,9 @@
+import { resolveTrimSearch, trimModelFamily } from "./lib/vehicleTrims";
+import {
+  normalizeVehicleInput,
+  isPickupModel,
+  vehicleModelsMatch,
+} from "./lib/vehicleMatching";
 import { parseVehicleSearch } from "./lib/vehicleSearch";
 import { ConvexError, v } from "convex/values";
 import {
@@ -343,6 +349,7 @@ function mapCategoryToSlug(value: string | undefined): {
     return { slug: "motorcycle", confidence: "medium" };
   }
   if (
+    normalized === "passenger car" ||
     normalized.includes("compact") ||
     normalized.includes("midsize") ||
     normalized.includes("large cars") ||
@@ -355,26 +362,6 @@ function mapCategoryToSlug(value: string | undefined): {
     return { slug: "van", confidence: "medium" };
   }
   return { slug: "car", confidence: "low" };
-}
-
-function normalizeModelName(value: string | undefined): string {
-  return (value ?? "")
-    .toLowerCase()
-    .replace(
-      /\b(all[-\s]?wheel|four[-\s]?wheel|front[-\s]?wheel|rear[-\s]?wheel)\s+drive\b/g,
-      " ",
-    )
-    .replace(/\b(awd|4wd|2wd|fwd|rwd|4x4|2x4)\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function isModelMatch(inputModel: string, candidateModel: string): boolean {
-  const input = normalizeModelName(inputModel);
-  const candidate = normalizeModelName(candidateModel);
-  if (!input || !candidate) return false;
-  return candidate.includes(input) || input.includes(candidate);
 }
 
 function getGeminiApiKey(): string | undefined {
@@ -484,6 +471,7 @@ async function classifyWithGeminiSearch(args: {
 async function fetchJson(url: string) {
   const response = await fetch(url, {
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(8000),
   });
   if (!response.ok) {
     throw new Error(`Vehicle lookup failed: ${response.status}`);
@@ -508,6 +496,7 @@ function dedupeVehicleSuggestions(
     make: string;
     model: string;
     source: "fuelEconomy" | "vpic";
+    matchedTrim?: string;
   }>,
 ) {
   const seen = new Set<string>();
@@ -530,12 +519,14 @@ async function searchFuelEconomyModelsForYear(
   year: number,
   makeQuery: string,
   modelQuery: string,
+  trim: ReturnType<typeof resolveTrimSearch> = null,
 ) {
   const suggestions: Array<{
     year: number;
     make: string;
     model: string;
     source: "fuelEconomy";
+    matchedTrim?: string;
   }> = [];
   const makes = toMenuItems(
     await fetchJson(
@@ -552,12 +543,24 @@ async function searchFuelEconomyModelsForYear(
         `https://www.fueleconomy.gov/ws/rest/vehicle/menu/model?year=${year}&make=${encodeURIComponent(make.value)}`,
       ),
     );
+    const seenFamilies = new Set<string>();
+    let suggestionLimit = modelQuery ? 6 : 3;
+    if (trim) suggestionLimit = 8;
     const matchingModels = models
       .filter((model) => {
+        if (trim) {
+          const family = trimModelFamily(model.text, trim.families);
+          if (!family || seenFamilies.has(family)) return false;
+          seenFamilies.add(family);
+          return true;
+        }
         if (!modelQuery) return true;
-        return model.text.toLowerCase().includes(modelQuery);
+        return (
+          model.text.toLowerCase().includes(modelQuery) ||
+          vehicleModelsMatch(modelQuery, model.text)
+        );
       })
-      .slice(0, modelQuery ? 6 : 3);
+      .slice(0, suggestionLimit);
 
     for (const model of matchingModels) {
       suggestions.push({
@@ -565,6 +568,7 @@ async function searchFuelEconomyModelsForYear(
         make: make.text,
         model: model.text,
         source: "fuelEconomy",
+        ...(trim ? { matchedTrim: trim.name } : {}),
       });
     }
   }
@@ -573,6 +577,15 @@ async function searchFuelEconomyModelsForYear(
 }
 
 export const searchModels = action({
+  returns: v.array(
+    v.object({
+      year: v.number(),
+      make: v.string(),
+      model: v.string(),
+      label: v.string(),
+      source: v.union(v.literal("fuelEconomy"), v.literal("vpic")),
+    }),
+  ),
   args: {
     query: v.string(),
   },
@@ -586,6 +599,7 @@ export const searchModels = action({
       model: string;
       label: string;
       source: "fuelEconomy" | "vpic";
+      matchedTrim?: string;
     }>
   > => {
     const normalizedQuery = args.query.trim().replace(/\s+/g, " ");
@@ -613,14 +627,17 @@ export const searchModels = action({
     }
 
     const parsed = parseVehicleSearch(normalizedQuery);
-    const makeQuery = parsed.make.toLowerCase();
-    const modelQuery = parsed.model.toLowerCase();
+    const lookup = normalizeVehicleInput(parsed.make, parsed.model);
+    const trim = resolveTrimSearch(parsed.make, parsed.model);
+    const makeQuery = (trim?.make ?? lookup.make).toLowerCase();
+    const modelQuery = trim ? "" : lookup.model.toLowerCase();
 
     const suggestions: Array<{
       year: number;
       make: string;
       model: string;
       source: "fuelEconomy" | "vpic";
+      matchedTrim?: string;
     }> = [];
 
     try {
@@ -632,7 +649,12 @@ export const searchModels = action({
           );
       const results = await Promise.allSettled(
         years.map((searchYear) =>
-          searchFuelEconomyModelsForYear(searchYear, makeQuery, modelQuery),
+          searchFuelEconomyModelsForYear(
+            searchYear,
+            makeQuery,
+            modelQuery,
+            trim,
+          ),
         ),
       );
       for (const result of results) {
@@ -655,17 +677,28 @@ export const searchModels = action({
           const vpic = await fetchJson(
             `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${encodeURIComponent(makeQuery)}/modelyear/${fallbackYear}?format=json`,
           );
+          const seenFamilies = new Set<string>();
           for (const result of vpic?.Results ?? []) {
             const make = String(result.Make_Name ?? makeQuery).trim();
             const model = String(result.Model_Name ?? "").trim();
             if (!make || !model) continue;
-            if (modelQuery && !model.toLowerCase().includes(modelQuery))
+            if (trim) {
+              const family = trimModelFamily(model, trim.families);
+              if (!family || seenFamilies.has(family)) continue;
+              seenFamilies.add(family);
+            }
+            if (
+              modelQuery &&
+              !model.toLowerCase().includes(modelQuery) &&
+              !vehicleModelsMatch(modelQuery, model)
+            )
               continue;
             suggestions.push({
               year: fallbackYear,
               make,
               model,
               source: "vpic",
+              ...(trim ? { matchedTrim: trim.name } : {}),
             });
           }
         } catch {
@@ -679,6 +712,23 @@ export const searchModels = action({
 });
 
 export const classify = action({
+  returns: v.object({
+    vehicleTypeId: v.optional(v.id("vehicleTypes")),
+    vehicleTypeName: v.optional(v.string()),
+    legacySize: legacySizeValidator,
+    source: v.union(
+      v.literal("fuelEconomy"),
+      v.literal("vpic"),
+      v.literal("fallback"),
+    ),
+    confidence: v.union(
+      v.literal("high"),
+      v.literal("medium"),
+      v.literal("low"),
+    ),
+    rawCategory: v.optional(v.string()),
+    needsAdminReview: v.boolean(),
+  }),
   args: {
     year: v.number(),
     make: v.string(),
@@ -706,6 +756,16 @@ export const classify = action({
 
     await ctx.runMutation(internal.vehicleTypes.ensureDefaultsInternal, {});
 
+    const trimOnly = resolveTrimSearch(args.make, args.model);
+    if (trimOnly)
+      return {
+        legacySize: "medium",
+        source: "fallback",
+        confidence: "low",
+        needsAdminReview: true,
+        rawCategory: `${trimOnly.name} is a trim shared by multiple models; choose the actual model`,
+      };
+
     if (isHeavyTruckVehicle(args.make, args.model)) {
       const semiType = await ctx.runQuery(
         internal.vehicleTypes.getBySlugInternal,
@@ -722,8 +782,9 @@ export const classify = action({
       };
     }
 
-    let canonicalMake = args.make.trim();
-    let canonicalModel = args.model.trim();
+    const lookup = normalizeVehicleInput(args.make, args.model);
+    let canonicalMake = lookup.make;
+    let modelCandidates: string[] = [lookup.model];
     try {
       const makes = toMenuItems(
         await fetchJson(
@@ -738,15 +799,19 @@ export const classify = action({
           `https://www.fueleconomy.gov/ws/rest/vehicle/menu/model?year=${args.year}&make=${encodeURIComponent(canonicalMake)}`,
         ),
       );
-      canonicalModel =
-        models.find(
-          (m) => m.text.toLowerCase() === canonicalModel.toLowerCase(),
-        )?.value ?? canonicalModel;
+      const matches = models.filter((m) =>
+        vehicleModelsMatch(lookup.model, m.text),
+      );
+      // Consider every plausible variant, even if one model name is exact.
+      // A base name can span body styles with different pricing categories.
+      modelCandidates = matches.length
+        ? matches.map((m) => m.value)
+        : [lookup.model];
     } catch {
       /* Other providers and manual category selection remain available. */
     }
     const make = encodeURIComponent(canonicalMake);
-    const model = encodeURIComponent(canonicalModel);
+
     let mapped: {
       slug: string;
       confidence: "high" | "medium" | "low";
@@ -754,35 +819,88 @@ export const classify = action({
     let source: "fuelEconomy" | "vpic" | "fallback" = "fallback";
     let rawCategory: string | undefined;
 
+    let conflictingCategories = false;
     try {
-      const options = await fetchJson(
-        `https://www.fueleconomy.gov/ws/rest/vehicle/menu/options?year=${args.year}&make=${make}&model=${model}`,
-      );
-      const menuItem = Array.isArray(options?.menuItem)
-        ? options.menuItem[0]
-        : options?.menuItem;
-      if (menuItem?.value) {
-        const vehicle = await fetchJson(
-          `https://www.fueleconomy.gov/ws/rest/vehicle/${encodeURIComponent(menuItem.value)}`,
+      if (modelCandidates.length > 12) {
+        conflictingCategories = true;
+        throw new Error("Too many model variants");
+      }
+      const optionIds = new Set<string>();
+      for (const candidate of modelCandidates) {
+        const options = toMenuItems(
+          await fetchJson(
+            `https://www.fueleconomy.gov/ws/rest/vehicle/menu/options?year=${args.year}&make=${make}&model=${encodeURIComponent(candidate)}`,
+          ),
         );
-        rawCategory = vehicle?.VClass;
-        mapped = mapCategoryToSlug(rawCategory);
+        for (const option of options) optionIds.add(option.value);
+      }
+      if (optionIds.size > 40) {
+        conflictingCategories = true;
+        throw new Error("Too many engine/trim variants");
+      }
+      const categories: string[] = [];
+      for (const id of optionIds) {
+        const vehicle = await fetchJson(
+          `https://www.fueleconomy.gov/ws/rest/vehicle/${encodeURIComponent(id)}`,
+        );
+        if (!vehicle?.VClass) throw new Error("Vehicle class is unavailable");
+        categories.push(vehicle.VClass);
+      }
+      const mappedCategories = categories.map(mapCategoryToSlug);
+      const slugs = new Set(mappedCategories.map((category) => category.slug));
+      conflictingCategories = slugs.size > 1;
+      if (
+        categories.length &&
+        !conflictingCategories &&
+        mappedCategories.every((c) => c.confidence !== "low")
+      ) {
+        mapped = mappedCategories[0];
+        rawCategory = [...new Set(categories)].join("; ");
         source = "fuelEconomy";
       }
     } catch {
-      // Fall through to vPIC.
+      // Incomplete provider evidence must not turn into a pricing decision.
     }
 
-    if (source === "fallback" || mapped.confidence === "low") {
+    if (
+      !conflictingCategories &&
+      (source === "fallback" || mapped.confidence === "low")
+    ) {
       try {
         const vpic = await fetchJson(
           `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${make}/modelyear/${args.year}?format=json`,
         );
         const match = (vpic?.Results ?? []).find((result: any) =>
-          isModelMatch(args.model, String(result.Model_Name ?? "")),
+          vehicleModelsMatch(lookup.model, String(result.Model_Name ?? "")),
         );
-        rawCategory =
-          match?.VehicleTypeName ?? match?.Model_Name ?? rawCategory;
+        rawCategory = match?.VehicleTypeName ?? rawCategory;
+        if (match && !match.VehicleTypeName) {
+          const typed = await Promise.all(
+            ["truck", "passenger car", "motorcycle"].map(async (type) => {
+              const result = await fetchJson(
+                `https://vpic.nhtsa.dot.gov/api/vehicles/GetModelsForMakeYear/make/${make}/modelyear/${args.year}/vehicletype/${encodeURIComponent(type)}?format=json`,
+              );
+              return (result?.Results ?? []).filter(
+                (row: { Model_Name?: string; VehicleTypeName?: string }) =>
+                  vehicleModelsMatch(lookup.model, row.Model_Name ?? ""),
+              );
+            }),
+          );
+          const classes = [
+            ...new Set<string>(
+              typed
+                .flat()
+                .map((row) => row.VehicleTypeName)
+                .filter(Boolean),
+            ),
+          ];
+          if (
+            classes.length === 1 &&
+            (classes[0].toLowerCase() !== "truck" ||
+              isPickupModel(lookup.model))
+          )
+            rawCategory = classes[0];
+        }
         const vpicMapped = mapCategoryToSlug(rawCategory);
         if (vpicMapped.confidence !== "low") {
           mapped = vpicMapped;
@@ -793,7 +911,7 @@ export const classify = action({
       }
     }
 
-    if (mapped.confidence === "low") {
+    if (mapped.confidence === "low" && !conflictingCategories) {
       try {
         const geminiMapped = await classifyWithGeminiSearch(args);
         if (
@@ -826,7 +944,9 @@ export const classify = action({
       legacySize: vehicleType?.legacySize ?? "medium",
       source,
       confidence: mapped.confidence,
-      rawCategory,
+      rawCategory: conflictingCategories
+        ? "Conflicting provider categories; manual confirmation required"
+        : rawCategory,
       needsAdminReview: mapped.confidence === "low" || !vehicleType,
     };
   },

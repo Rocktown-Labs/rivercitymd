@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
   ArrowRight,
   Gift,
@@ -52,7 +52,7 @@ type WalletCard = {
 export function GiftCardWallet() {
   const wallet = useQuery(api.giftCards.getMyGiftCards);
   const claimPending = useMutation(api.giftCards.claimPendingForCurrentUser);
-  const claimByCode = useMutation(api.giftCards.claimByCode);
+  const claimByCode = useAction(api.giftCards.claimByCode);
   const [selectedId, setSelectedId] = React.useState<Id<"giftCards"> | null>(
     null,
   );
