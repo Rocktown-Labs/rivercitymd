@@ -219,8 +219,11 @@ test("an unexpected Stripe price stops the correction without local changes", as
 test("archived products stay archived while a retry-safe active replacement receives the corrected rate", async () => {
   const { t, args } = await setup();
   let current = stripeSubscription(16500, "price_old");
-  let productsCreated = 0;
+  const productKeys: string[] = [];
+  const rateKeys: string[] = [];
+  let productPosts = 0;
   let ratesChanged = 0;
+  let failFirstUpdate = true;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, options?: RequestInit) => {
@@ -232,7 +235,10 @@ test("archived products stay archived while a retry-safe active replacement rece
           tax_code: "txcd_10000000",
         });
       if (path === "/v1/products") {
-        productsCreated++;
+        productPosts++;
+        productKeys.push(
+          (options?.headers as Record<string, string>)["Idempotency-Key"],
+        );
         expect(new URLSearchParams(String(options?.body)).get("tax_code")).toBe(
           "txcd_10000000",
         );
@@ -252,12 +258,28 @@ test("archived products stay archived while a retry-safe active replacement rece
         expect(
           (options.headers as Record<string, string>)["Idempotency-Key"],
         ).toContain("v2-");
+        rateKeys.push(
+          (options.headers as Record<string, string>)["Idempotency-Key"],
+        );
+        if (failFirstUpdate) {
+          failFirstUpdate = false;
+          throw new Error("Network failed after product creation");
+        }
         ratesChanged++;
         current = stripeSubscription(14500, "price_new");
       }
       return Response.json(current);
     }),
   );
+  await expect(
+    t.action(internal.subscriptionCorrections.reconcile, {
+      ...args,
+      apply: true,
+    }),
+  ).rejects.toThrow("Network failed after product creation");
+  expect(
+    (await t.run((ctx) => ctx.db.get(args.subscriptionId)))?.totalPrice,
+  ).toBe(165);
   const result = await t.action(internal.subscriptionCorrections.reconcile, {
     ...args,
     apply: true,
@@ -267,6 +289,12 @@ test("archived products stay archived while a retry-safe active replacement rece
     ...args,
     apply: true,
   });
-  expect(productsCreated).toBe(1);
+  // Stripe receives two requests with the same key and replays the same
+  // replacement product; the completed third call makes no extra requests.
+  expect(productPosts).toBe(2);
+  expect(productKeys).toHaveLength(2);
+  expect(new Set(productKeys).size).toBe(1);
+  expect(rateKeys).toHaveLength(2);
+  expect(new Set(rateKeys).size).toBe(1);
   expect(ratesChanged).toBe(1);
 });
