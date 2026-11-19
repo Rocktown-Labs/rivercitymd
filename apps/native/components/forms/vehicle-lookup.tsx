@@ -82,6 +82,7 @@ export function VehicleLookup({
       label: string;
       source: "fuelEconomy" | "vpic";
       matchedTrim?: string;
+      similarModelMatch?: boolean;
     }>
   >([]);
   const [isSearching, setIsSearching] = React.useState(false);
@@ -472,6 +473,11 @@ export function VehicleLookup({
                   {/* Suggestions List */}
                   {suggestions.length > 0 ? (
                     <View className="rounded-2xl border border-border bg-card p-1 shadow-lg">
+                      {suggestions.some((suggestion) => suggestion.similarModelMatch) ? (
+                        <Text className="px-3 py-2 text-xs text-muted-foreground">
+                          Similar model names found. Choose the vehicle that matches yours.
+                        </Text>
+                      ) : null}
                       {suggestions[0]?.matchedTrim ? (
                         <Text className="px-3 py-2 text-xs text-muted-foreground">
                           {suggestions[0].matchedTrim} can match several
