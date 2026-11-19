@@ -33,12 +33,11 @@ The 2002 Dodge source is an online copy of the factory service manual (VIN decod
 - 1966 flinstone mobile: Model/vehicle identity needs confirmation.
 - 2022 GMC Denali: Denali is a trim shared by multiple models; choose the actual model.
 - 2019 HD Trike: Model/vehicle identity needs confirmation.
-- 2014 Lexus G350: Model/vehicle identity needs confirmation.
 - 2021 Denali Denali: Model/vehicle identity needs confirmation.
 - 2015 GMC 1500: Model/vehicle identity needs confirmation.
 - 2022 Gmc Elevation: Elevation is a trim shared by multiple models; choose the actual model.
 
-[2022 Acadia](https://www.gmc.com/content/dam/gmc/na/us/english/index/about/download-brochures/2022-models/02-pdf/GMTK22CT000_MY22_GMC%20ACADIA_DESKTOP_INTERACTIVE_3-25.pdf) and [Terrain](https://www.gmc.com/content/dam/gmc/na/us/english/index/about/download-brochures/2022-models/02-pdf/GMTN22CT000FO_MY22_GMC%20TERRAIN_3-10.pdf) factory brochures also list Elevation Edition. Elevation cannot safely imply a Sierra truck. Denali is shared by GMC trucks and SUVs. “1500” alone does not prove Sierra versus Yukon/Yukon XL 1500 in this historical fleet. Harley Trike needs the actual model and business motorcycle category; Lexus G350 could be a misspelling of different models. The fictional-looking Flintstone entry cannot be researched into a real car.
+[2022 Acadia](https://www.gmc.com/content/dam/gmc/na/us/english/index/about/download-brochures/2022-models/02-pdf/GMTK22CT000_MY22_GMC%20ACADIA_DESKTOP_INTERACTIVE_3-25.pdf) and [Terrain](https://www.gmc.com/content/dam/gmc/na/us/english/index/about/download-brochures/2022-models/02-pdf/GMTN22CT000FO_MY22_GMC%20TERRAIN_3-10.pdf) factory brochures also list Elevation Edition. Elevation cannot safely imply a Sierra truck. Denali is shared by GMC trucks and SUVs. “1500” alone does not prove Sierra versus Yukon/Yukon XL 1500 in this historical fleet. Harley Trike needs the actual model and business motorcycle category. The Lexus identity is now owner-confirmed and resolved below. The fictional-looking Flintstone entry cannot be researched into a real car.
 
 The old 2010 Audi Unknown record was deleted independently in production and replaced with a typed 2017 Audi Q5. Do not recreate or patch the deleted record.
 
