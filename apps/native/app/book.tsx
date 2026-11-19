@@ -54,6 +54,7 @@ import {
 } from "@/components/forms/address-search";
 import { VehicleLookup, type VehicleLookupValue } from "@/components/forms/vehicle-lookup";
 import { TimeSlotPicker } from "@/components/forms/time-slot-picker";
+import { VehicleCategoryPicker, type VehicleCategory } from "@/components/forms/vehicle-category-picker";
 import { THEME } from "@/lib/theme";
 import { openAuthSession } from "@/lib/browser";
 import { useNetworkStatus } from "@/lib/network";
@@ -127,6 +128,48 @@ export default function BookScreen() {
   const depositSettings = useQuery(api.depositSettings.get);
   const petFeeSettings = useQuery(api.petFeeSettings.get);
 
+  const updateVehicle = useMutation(api.vehicles.updateVehicle);
+  const [savingCategoryId, setSavingCategoryId] = React.useState<string | null>(
+    null,
+  );
+  const assignSavedVehicleCategory = async (
+    id: Id<"vehicles">,
+    type: VehicleCategory | undefined,
+  ) => {
+    if (!type) return;
+    setSavingCategoryId(id);
+    try {
+      await updateVehicle({
+        id,
+        vehicleTypeId: type._id,
+        classification: {
+          source: "manual",
+          confidence: "high",
+          rawCategory: "Customer category confirmation in mobile booking",
+          needsAdminReview: false,
+        },
+      });
+      setSelectedVehicles((previous) =>
+        previous.map((vehicle) =>
+          vehicle.existingId === id
+            ? {
+                ...vehicle,
+                vehicleTypeId: type._id,
+                vehicleTypeName: type.name,
+                size: type.legacySize,
+              }
+            : vehicle,
+        ),
+      );
+    } catch (error) {
+      Alert.alert(
+        "Could not save category",
+        error instanceof Error ? error.message : "Try again before continuing.",
+      );
+    } finally {
+      setSavingCategoryId(null);
+    }
+  };
   const createOrUpdateDraft = useAction(api.bookingDrafts.createOrUpdate);
   const createBookingCheckout = useAction(api.payments.createBookingCheckout);
   const confirmBookingCheckout = useAction(api.payments.confirmBookingCheckout);
@@ -554,7 +597,7 @@ export default function BookScreen() {
       return Boolean(scheduledDate && scheduledTime);
     }
     if (step === 3) {
-      return targetVehicles.length > 0;
+      return targetVehicles.length > 0 && targetVehicles.every((vehicle) => Boolean(vehicle.vehicleTypeId));
     }
     if (step === 4) {
       // Must have a core package selected for each vehicle
@@ -583,7 +626,7 @@ export default function BookScreen() {
     if (!canProceedToNext()) {
       if (step === 1) setError("Please enter your complete service address.");
       if (step === 2) setError("Please select an available date and arrival window.");
-      if (step === 3) setError("Please select or add at least one vehicle.");
+      if (step === 3) setError("Select or add a vehicle and choose its category for accurate pricing.");
       if (step === 4) setError("Please select a base detailing package for each vehicle.");
       return;
     }
@@ -893,6 +936,15 @@ export default function BookScreen() {
                       {/* Condition Questions (Pet Hair & Heavy Soil) */}
                       {isSelected ? (
                         <CardContent className="gap-3 p-4 pt-0 border-t border-border/40">
+                          {!selection?.vehicleTypeId && (
+                            <VehicleCategoryPicker
+                              value={selection?.vehicleTypeId}
+                              onSelect={(type) =>
+                                void assignSavedVehicleCategory(v._id, type)
+                              }
+                              disabled={savingCategoryId === v._id}
+                            />
+                          )}
                           <Text className="text-xs font-bold text-muted-foreground uppercase tracking-wider mt-2">
                             Vehicle Condition
                           </Text>

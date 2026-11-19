@@ -1067,3 +1067,81 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.stubGlobal("fetch", vi.fn(stripeFetchMock));
 });
+
+test("successful recipient and admin revalidations leave the PIN budget available for claiming", async () => {
+  const t = convexTest(schema, modules);
+  const user = await createUser(t, {
+    name: "Recipient",
+    email: "recipient@pin.invalid",
+  });
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@pin.invalid",
+    pin: "4321",
+  });
+  for (let i = 0; i < 8; i++) {
+    expect(
+      (
+        await t.action(api.giftCards.validateForBooking, {
+          code: gift.code,
+          pin: "4321",
+          orderAmount: 10 + i,
+        })
+      ).appliedAmount,
+    ).toBe(10 + i);
+    expect(
+      (
+        await t.action(internal.giftCards.validateForAdmin, {
+          code: gift.code,
+          pin: "4321",
+        })
+      ).availableBalance,
+    ).toBe(100);
+  }
+  const asUser = t.withIdentity({
+    subject: user,
+    email: "recipient@pin.invalid",
+  });
+  expect(
+    await asUser.action(api.giftCards.claimByCode, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).toBe(gift._id);
+});
+
+test("failed validation PIN guesses persist and block even correct guesses after exhaustion", async () => {
+  const t = convexTest(schema, modules);
+  const gift = await t.mutation(internal.giftCards.createGiftCard, {
+    amount: 100,
+    deliveryMethod: "print",
+    source: "admin_sale",
+    paymentMethod: "cash",
+    purchaserName: "Buyer",
+    purchaserEmail: "buyer@pin.invalid",
+    pin: "4321",
+  });
+  for (let i = 0; i < 5; i++)
+    await expect(
+      t.action(api.giftCards.validateForBooking, {
+        code: gift.code,
+        pin: "0000",
+      }),
+    ).rejects.toThrow("PIN is incorrect");
+  await expect(
+    t.action(api.giftCards.validateForBooking, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).rejects.toThrow("Too many attempts");
+  await expect(
+    t.action(internal.giftCards.validateForAdmin, {
+      code: gift.code,
+      pin: "4321",
+    }),
+  ).rejects.toThrow("Too many attempts");
+});

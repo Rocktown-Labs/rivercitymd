@@ -5,6 +5,10 @@ export function normalizeVehicleMake(make: string) {
   const value = make.trim().replace(/\s+/g, " ");
   const aliases: Record<string, string> = {
     chevy: "Chevrolet",
+    hobda: "Honda",
+    toyoya: "Toyota",
+    toyotal: "Toyota",
+    nissisn: "Nissan",
     mercedes: "Mercedes-Benz",
     "mercedes benz": "Mercedes-Benz",
     "range rover": "Land Rover",
@@ -69,6 +73,26 @@ export function normalizeVehicleInput(
   ) {
     canonicalMake = "Ram";
     canonicalModel = canonicalModel.replace(/^ram\s+/i, "");
+  }
+  const modelAliases: Record<string, Record<string, string>> = {
+    nissan: { armda: "Armada" },
+    toyota: { "4run": "4Runner" },
+    gmc: { arcadia: "Acadia" },
+    lexus: { "570": "LX 570" },
+  };
+  canonicalModel =
+    modelAliases[canonicalMake.toLowerCase()]?.[canonicalModel.toLowerCase()] ??
+    canonicalModel;
+  if (canonicalMake.toLowerCase() === "gmc")
+    canonicalModel = canonicalModel.replace(/^sierr\s+/i, "Sierra ");
+  if (/^f[- ]?150$/i.test(make.trim())) {
+    canonicalMake = "Ford";
+    canonicalModel = `F-150 ${canonicalModel}`.trim();
+  }
+  if (make.trim().toLowerCase() === "challenger") {
+    canonicalMake = "Dodge";
+    canonicalModel =
+      `Challenger ${canonicalModel.replace(/^rt$/i, "R/T")}`.trim();
   }
   return { make: canonicalMake, model: canonicalModel };
 }

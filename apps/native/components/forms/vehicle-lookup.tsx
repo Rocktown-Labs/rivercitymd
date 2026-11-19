@@ -19,6 +19,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Text } from "@/components/ui/text";
+import {
+  VehicleCategoryPicker,
+  type VehicleCategory,
+} from "./vehicle-category-picker";
 import { THEME } from "@/lib/theme";
 
 export type VehicleClassification = {
@@ -64,8 +68,10 @@ export function VehicleLookup({
   onSelectVehicle,
 }: VehicleLookupProps) {
   const [internalExpanded, setInternalExpanded] = React.useState(true);
-  const isCardExpanded = isExpanded !== undefined ? isExpanded : internalExpanded;
-  const toggleCard = onToggleExpanded || (() => setInternalExpanded((prev) => !prev));
+  const isCardExpanded =
+    isExpanded !== undefined ? isExpanded : internalExpanded;
+  const toggleCard =
+    onToggleExpanded || (() => setInternalExpanded((prev) => !prev));
 
   const [searchQuery, setSearchQuery] = React.useState("");
   const [suggestions, setSuggestions] = React.useState<
@@ -82,129 +88,195 @@ export function VehicleLookup({
   const [isClassifying, setIsClassifying] = React.useState(false);
   const [isManualMode, setIsManualMode] = React.useState(false);
 
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+  const selectionVersion = React.useRef(0);
+  const searchVersion = React.useRef(0);
+  const manualTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  React.useEffect(
+    () => () => {
+      selectionVersion.current++;
+      searchVersion.current++;
+      clearTimeout(manualTimer.current);
+    },
+    [],
+  );
+
   const searchModels = useAction(api.vehicleTypes.searchModels);
   const classifyVehicle = useAction(api.vehicleTypes.classify);
 
   const isVehicleSelected = Boolean(
-    value.year && /^\d{4}$/.test(value.year) && value.make?.trim() && value.model?.trim(),
+    value.year &&
+    /^\d{4}$/.test(value.year) &&
+    Number(value.year) >= 1900 &&
+    Number(value.year) <= new Date().getFullYear() + 1 &&
+    value.make?.trim() &&
+    value.model?.trim(),
   );
 
-  // Debounced auto-complete search
+  // Ignore in-flight results after another query, clear, or unmount.
   React.useEffect(() => {
+    const version = ++searchVersion.current;
+    let cancelled = false;
     const trimmed = searchQuery.trim();
-    if (trimmed.length < 3) {
+    if (trimmed.length < 3 || isManualMode) {
       setSuggestions([]);
+      setIsSearching(false);
       return;
     }
-
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
         const results = await searchModels({ query: trimmed });
-        setSuggestions(results || []);
+        if (!cancelled && version === searchVersion.current)
+          setSuggestions(results);
       } catch {
-        setSuggestions([]);
+        if (!cancelled && version === searchVersion.current) setSuggestions([]);
       } finally {
-        setIsSearching(false);
+        if (!cancelled && version === searchVersion.current)
+          setIsSearching(false);
       }
     }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, searchModels, isManualMode]);
 
-    return () => clearTimeout(timer);
-  }, [searchQuery, searchModels]);
-
+  const publish = (next: VehicleLookupValue) => {
+    valueRef.current = next;
+    onChange(next);
+  };
+  const invalidateClassification = () => {
+    selectionVersion.current++;
+    clearTimeout(manualTimer.current);
+    setIsClassifying(false);
+  };
+  const classifySelection = async (next: VehicleLookupValue) => {
+    const version = ++selectionVersion.current;
+    publish(next);
+    if (next.classification?.source === "manual" && next.vehicleTypeId) return;
+    if (
+      !/^\d{4}$/.test(next.year) ||
+      Number(next.year) < 1900 ||
+      Number(next.year) > new Date().getFullYear() + 1 ||
+      !next.make.trim() ||
+      !next.model.trim()
+    )
+      return;
+    setIsClassifying(true);
+    try {
+      const result = await classifyVehicle({
+        year: Number(next.year),
+        make: next.make.trim(),
+        model: next.model.trim(),
+      });
+      if (
+        version !== selectionVersion.current ||
+        valueRef.current.year !== next.year ||
+        valueRef.current.make !== next.make ||
+        valueRef.current.model !== next.model
+      )
+        return;
+      const resolved = {
+        ...valueRef.current,
+        vehicleTypeId: result.vehicleTypeId,
+        vehicleTypeName: result.vehicleTypeName,
+        size: result.vehicleTypeId ? result.legacySize : undefined,
+        classification: {
+          source: result.source,
+          confidence: result.confidence,
+          rawCategory: result.rawCategory,
+          needsAdminReview: result.needsAdminReview,
+        },
+      };
+      publish(resolved);
+      if (resolved.vehicleTypeId) onSelectVehicle?.(resolved);
+    } catch {
+      if (
+        version !== selectionVersion.current ||
+        valueRef.current.year !== next.year ||
+        valueRef.current.make !== next.make ||
+        valueRef.current.model !== next.model
+      )
+        return;
+      publish({
+        ...valueRef.current,
+        size: undefined,
+        vehicleTypeId: undefined,
+        vehicleTypeName: undefined,
+        classification: {
+          source: "fallback",
+          confidence: "low",
+          needsAdminReview: true,
+        },
+      });
+    } finally {
+      if (version === selectionVersion.current) setIsClassifying(false);
+    }
+  };
   const handleSelectSuggestion = async (suggestion: {
     year: number;
     make: string;
     model: string;
     label: string;
   }) => {
+    clearTimeout(manualTimer.current);
+    searchVersion.current++;
     setSuggestions([]);
     setSearchQuery("");
-    setIsClassifying(true);
-
-    try {
-      const classification = await classifyVehicle({
-        year: suggestion.year,
-        make: suggestion.make,
-        model: suggestion.model,
-      });
-
-      const nextVehicle: VehicleLookupValue = {
-        ...value,
-        year: String(suggestion.year),
-        make: suggestion.make,
-        model: suggestion.model,
-        size: classification.legacySize,
-        vehicleTypeId: classification.vehicleTypeId,
-        vehicleTypeName: classification.vehicleTypeName,
-        classification: {
-          source: classification.source,
-          confidence: classification.confidence,
-          rawCategory: classification.rawCategory,
-          needsAdminReview: classification.needsAdminReview,
-        },
-      };
-
-      onChange(nextVehicle);
-      onSelectVehicle?.(nextVehicle);
-    } catch {
-      const nextVehicle: VehicleLookupValue = {
-        ...value,
-        year: String(suggestion.year),
-        make: suggestion.make,
-        model: suggestion.model,
-        size: "medium",
-      };
-      onChange(nextVehicle);
-      onSelectVehicle?.(nextVehicle);
-    } finally {
-      setIsClassifying(false);
+    await classifySelection({
+      ...valueRef.current,
+      year: String(suggestion.year),
+      make: suggestion.make,
+      model: suggestion.model,
+      size: undefined,
+      vehicleTypeId: undefined,
+      vehicleTypeName: undefined,
+      classification: undefined,
+    });
+  };
+  const handleManualEdit = (patch: Partial<VehicleLookupValue>) => {
+    invalidateClassification();
+    const next = {
+      ...valueRef.current,
+      ...patch,
+      size: undefined,
+      vehicleTypeId: undefined,
+      vehicleTypeName: undefined,
+      classification: undefined,
+    };
+    publish(next);
+    if (/^\d{4}$/.test(next.year) && next.make.trim() && next.model.trim()) {
+      manualTimer.current = setTimeout(() => void classifySelection(valueRef.current), 350);
     }
   };
-
-  const handleManualClassify = async (year: string, make: string, model: string) => {
-    if (!/^\d{4}$/.test(year) || !make.trim() || !model.trim()) return;
-
-    setIsClassifying(true);
-    try {
-      const classification = await classifyVehicle({
-        year: Number(year),
-        make: make.trim(),
-        model: model.trim(),
-      });
-
-      const nextVehicle: VehicleLookupValue = {
-        ...value,
-        year,
-        make: make.trim(),
-        model: model.trim(),
-        size: classification.legacySize,
-        vehicleTypeId: classification.vehicleTypeId,
-        vehicleTypeName: classification.vehicleTypeName,
-        classification: {
-          source: classification.source,
-          confidence: classification.confidence,
-          rawCategory: classification.rawCategory,
-          needsAdminReview: classification.needsAdminReview,
-        },
-      };
-
-      onChange(nextVehicle);
-      onSelectVehicle?.(nextVehicle);
-    } catch {
-      onChange({
-        ...value,
-        year,
-        make: make.trim(),
-        model: model.trim(),
-      });
-    } finally {
-      setIsClassifying(false);
-    }
+  const selectCategory = (type: VehicleCategory | undefined) => {
+    invalidateClassification();
+    const next: VehicleLookupValue = {
+      ...valueRef.current,
+      vehicleTypeId: type?._id,
+      vehicleTypeName: type?.name,
+      size: type?.legacySize,
+      classification: type
+        ? {
+            source: "manual",
+            confidence: "high",
+            rawCategory: "Manual customer category selection",
+            needsAdminReview: false,
+          }
+        : undefined,
+    };
+    publish(next);
+    if (type) onSelectVehicle?.(next);
   };
 
   const handleClearVehicle = () => {
-    onChange({
+    invalidateClassification();
+    searchVersion.current++;
+    publish({
       year: "",
       make: "",
       model: "",
@@ -243,7 +315,10 @@ export function VehicleLookup({
 
           <View className="flex-1">
             <Text className="font-bold text-sm">
-              {title || (isVehicleSelected ? `${value.year} ${value.make} ${value.model}` : "Vehicle")}
+              {title ||
+                (isVehicleSelected
+                  ? `${value.year} ${value.make} ${value.model}`
+                  : "Vehicle")}
             </Text>
             {!isCardExpanded && isVehicleSelected ? (
               <Text className="text-xs text-muted-foreground" numberOfLines={1}>
@@ -257,7 +332,11 @@ export function VehicleLookup({
 
         <View className="flex-row items-center gap-2">
           {!isCardExpanded && isVehicleSelected ? (
-            <Badge variant="success" size="sm" label="Saved" />
+            <Badge
+              variant="success"
+              size="sm"
+              label={value.vehicleTypeId ? "Selected" : "Choose category"}
+            />
           ) : null}
 
           {onRemove ? (
@@ -299,11 +378,17 @@ export function VehicleLookup({
                           {value.year} {value.make} {value.model}
                         </Text>
                         {value.vehicleTypeName ? (
-                          <Badge variant="accent" size="sm" label={value.vehicleTypeName} />
+                          <Badge
+                            variant="accent"
+                            size="sm"
+                            label={value.vehicleTypeName}
+                          />
                         ) : null}
                       </View>
                       <Text className="text-xs text-emerald-800 dark:text-emerald-300">
-                        Vehicle specifications & pricing type detected
+                        {value.vehicleTypeId
+                          ? "Vehicle category selected"
+                          : "Choose a category below for accurate pricing"}
                       </Text>
                     </View>
                   </View>
@@ -324,8 +409,12 @@ export function VehicleLookup({
                   label="Vehicle Color (Optional)"
                   placeholder="e.g. Midnight Black, Pearl White"
                   value={value.color || ""}
-                  onChangeText={(text) => onChange({ ...value, color: text })}
-                  leftIcon={<Palette size={16} color={THEME.light.mutedForeground} />}
+                  onChangeText={(text) =>
+                    publish({ ...valueRef.current, color: text })
+                  }
+                  leftIcon={
+                    <Palette size={16} color={THEME.light.mutedForeground} />
+                  }
                 />
               ) : null}
 
@@ -335,7 +424,12 @@ export function VehicleLookup({
                   placeholder="ABC-1234"
                   autoCapitalize="characters"
                   value={value.licensePlate || ""}
-                  onChangeText={(text) => onChange({ ...value, licensePlate: text.toUpperCase() })}
+                  onChangeText={(text) =>
+                    publish({
+                      ...valueRef.current,
+                      licensePlate: text.toUpperCase(),
+                    })
+                  }
                 />
               ) : null}
             </View>
@@ -345,20 +439,30 @@ export function VehicleLookup({
               {!isManualMode ? (
                 <View className="gap-2">
                   <Input
-                    label="Search by Year, Make, Model"
-                    placeholder="e.g. 2021 Toyota RAV4 or 2018 Ford F-150"
+                    label="Search by Make, Model or Trim"
+                    placeholder="e.g. Yukon Denali, STX, or 2021 Toyota RAV4"
                     value={searchQuery}
-                    onChangeText={setSearchQuery}
+                    onChangeText={(text) => {
+                      invalidateClassification();
+                      searchVersion.current++;
+                      setSearchQuery(text);
+                    }}
                     leftIcon={
                       isSearching ? (
-                        <ActivityIndicator size="small" color={THEME.light.accent} />
+                        <ActivityIndicator
+                          size="small"
+                          color={THEME.light.accent}
+                        />
                       ) : (
                         <Search size={18} color={THEME.light.mutedForeground} />
                       )
                     }
                     rightIcon={
                       searchQuery ? (
-                        <Pressable accessibilityRole="button" onPress={() => setSearchQuery("")}>
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => setSearchQuery("")}
+                        >
                           <X size={16} color={THEME.light.mutedForeground} />
                         </Pressable>
                       ) : undefined
@@ -370,23 +474,29 @@ export function VehicleLookup({
                     <View className="rounded-2xl border border-border bg-card p-1 shadow-lg">
                       {suggestions[0]?.matchedTrim ? (
                         <Text className="px-3 py-2 text-xs text-muted-foreground">
-                          {suggestions[0].matchedTrim} can match several vehicles. Choose your model and body below; trim availability varies by year.
+                          {suggestions[0].matchedTrim} can match several
+                          vehicles. Choose your model and body below; trim
+                          availability varies by year.
                         </Text>
                       ) : null}
-                      {suggestions.slice(0, 6).map((item, index) => (
+                      {suggestions.map((item, index) => (
                         <Pressable
                           key={`${item.year}-${item.make}-${item.model}-${index}`}
                           accessibilityRole="button"
                           onPress={() => void handleSelectSuggestion(item)}
                           className={`flex-row items-center justify-between rounded-xl p-3 active:bg-secondary ${
-                            index < suggestions.length - 1 ? "border-b border-border/40" : ""
+                            index < suggestions.length - 1
+                              ? "border-b border-border/40"
+                              : ""
                           }`}
                         >
                           <View className="flex-1 gap-0.5">
                             <Text className="text-sm font-bold text-foreground">
                               {item.year} {item.make} {item.model}
                             </Text>
-                            <Text className="text-xs text-muted-foreground">{item.label}</Text>
+                            <Text className="text-xs text-muted-foreground">
+                              {item.label}
+                            </Text>
                           </View>
                           <Check size={16} color={THEME.light.accent} />
                         </Pressable>
@@ -405,13 +515,9 @@ export function VehicleLookup({
                         keyboardType="numeric"
                         maxLength={4}
                         value={value.year}
-                        onChangeText={(text) => {
-                          const next = { ...value, year: text };
-                          onChange(next);
-                          if (text.length === 4 && value.make && value.model) {
-                            void handleManualClassify(text, value.make, value.model);
-                          }
-                        }}
+                        onChangeText={(text) =>
+                          handleManualEdit({ year: text })
+                        }
                       />
                     </View>
                     <View className="flex-1">
@@ -419,13 +525,9 @@ export function VehicleLookup({
                         label="Make"
                         placeholder="Toyota"
                         value={value.make}
-                        onChangeText={(text) => {
-                          const next = { ...value, make: text };
-                          onChange(next);
-                          if (value.year && text && value.model) {
-                            void handleManualClassify(value.year, text, value.model);
-                          }
-                        }}
+                        onChangeText={(text) =>
+                          handleManualEdit({ make: text })
+                        }
                       />
                     </View>
                   </View>
@@ -434,13 +536,7 @@ export function VehicleLookup({
                     label="Model"
                     placeholder="RAV4"
                     value={value.model}
-                    onChangeText={(text) => {
-                      const next = { ...value, model: text };
-                      onChange(next);
-                      if (value.year && value.make && text) {
-                        void handleManualClassify(value.year, value.make, text);
-                      }
-                    }}
+                    onChangeText={(text) => handleManualEdit({ model: text })}
                   />
 
                   {showColor ? (
@@ -448,8 +544,15 @@ export function VehicleLookup({
                       label="Color (Optional)"
                       placeholder="e.g. Midnight Black"
                       value={value.color || ""}
-                      onChangeText={(text) => onChange({ ...value, color: text })}
-                      leftIcon={<Palette size={16} color={THEME.light.mutedForeground} />}
+                      onChangeText={(text) =>
+                        publish({ ...valueRef.current, color: text })
+                      }
+                      leftIcon={
+                        <Palette
+                          size={16}
+                          color={THEME.light.mutedForeground}
+                        />
+                      }
                     />
                   ) : null}
                 </View>
@@ -459,15 +562,29 @@ export function VehicleLookup({
               <View className="flex-row justify-end">
                 <Pressable
                   accessibilityRole="button"
-                  onPress={() => setIsManualMode(!isManualMode)}
+                  onPress={() => {
+                    invalidateClassification();
+                    searchVersion.current++;
+                    setIsManualMode(!isManualMode);
+                  }}
                   className="py-1 px-2 active:opacity-70"
                 >
                   <Text className="text-xs font-semibold text-accent">
-                    {isManualMode ? "Search Vehicles by Make & Model" : "Enter Vehicle Manually"}
+                    {isManualMode
+                      ? "Search Vehicles by Make & Model"
+                      : "Enter Vehicle Manually"}
                   </Text>
                 </Pressable>
               </View>
             </View>
+          )}
+
+          {(isManualMode || isVehicleSelected) && (
+            <VehicleCategoryPicker
+              value={value.vehicleTypeId}
+              onSelect={selectCategory}
+              disabled={!isVehicleSelected}
+            />
           )}
 
           {isClassifying ? (

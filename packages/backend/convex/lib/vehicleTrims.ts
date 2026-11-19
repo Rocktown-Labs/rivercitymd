@@ -20,7 +20,7 @@ const TRIM_HINTS = [
   {
     name: "Elevation",
     makes: ["GMC"],
-    models: ["Sierra", "Canyon", "Terrain"],
+    models: ["Sierra", "Canyon", "Terrain", "Acadia"],
   },
   {
     name: "AT4",

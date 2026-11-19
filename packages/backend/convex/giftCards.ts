@@ -7,10 +7,11 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getUserIdFromIdentity, requireAdmin } from "./auth";
-import { assertRateLimit, normalizeRateLimitKey } from "./rateLimiter";
+import { assertRateLimit, normalizeRateLimitKey, rateLimiter } from "./rateLimiter";
 import {
   GIFT_CARD_CLAIM_TTL_MS,
   GIFT_CARD_CURRENCY,
@@ -1057,6 +1058,30 @@ export const revealGiftCardCode = query({
   },
 });
 
+// Correct revalidations must not consume guesses, but an exhausted budget
+// must be checked before comparing even a correct PIN to prevent brute-force
+// callers from probing past the limit. Failed guesses commit independently.
+async function validateGiftCardPin(
+  ctx: ActionCtx,
+  code: string,
+  expectedPin: string,
+  suppliedPin?: string,
+) {
+  const key = normalizeGiftCardCode(code);
+  const status = await rateLimiter.check(ctx, "giftCardPinByCode", { key });
+  if (!status.ok)
+    throw new ConvexError({
+      code: "RATE_LIMITED",
+      message: "Too many attempts. Please wait a moment and try again.",
+      retryAfter: status.retryAfter,
+      limit: "giftCardPinByCode",
+    });
+  if (!suppliedPin || suppliedPin.trim() !== expectedPin) {
+    await assertRateLimit(ctx, "giftCardPinByCode", { key });
+    throw new ConvexError({ message: "That PIN is incorrect." });
+  }
+}
+
 export const validateForBooking = action({
   args: {
     code: v.string(),
@@ -1109,12 +1134,7 @@ export const validateForBooking = action({
       });
     }
     if (card.pin && !claimedByCurrentUser) {
-      await assertRateLimit(ctx, "giftCardPinByCode", {
-        key: normalizeGiftCardCode(args.code),
-      });
-      if (!args.pin || args.pin.trim() !== card.pin) {
-        throw new ConvexError({ message: "That PIN is incorrect." });
-      }
+      await validateGiftCardPin(ctx,args.code,card.pin,args.pin);
     }
 
     const appliedAmount = roundCurrency(
@@ -1164,11 +1184,7 @@ export const validateForAdmin = internalAction({
       throw new ConvexError({ message: "This gift card has no balance left." });
     }
     if (card.pin) {
-      await assertRateLimit(ctx, "giftCardPinByCode", {
-        key: normalizeGiftCardCode(args.code),
-      });
-      if (!args.pin || args.pin.trim() !== card.pin)
-        throw new ConvexError({ message: "That PIN is incorrect." });
+      await validateGiftCardPin(ctx,args.code,card.pin,args.pin);
     }
     return {
       giftCardId: card._id,

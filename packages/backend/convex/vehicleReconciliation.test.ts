@@ -114,3 +114,77 @@ test("unresolved legacy vehicles are flagged without changing their type or iden
     classification: { needsAdminReview: true },
   });
 });
+
+test("researched identity corrections require evidence, retain before-images, and only confirm matching overrides", async () => {
+  const t = convexTest(schema, modules);
+  const record = await t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", {
+      name: "Test",
+      email: "research@example.invalid",
+      role: "client",
+    });
+    const vehicleTypeId = await ctx.db.insert("vehicleTypes", {
+      name: "Truck",
+      slug: "truck",
+      legacySize: "large",
+      isActive: true,
+      displayOrder: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const vehicleId = await ctx.db.insert("vehicles", {
+      userId,
+      year: 2016,
+      make: "GMC",
+      model: "Sierr 2500HD Denali",
+      vehicleTypeId,
+      vehicleTypeOverrideAt: 123,
+      size: "medium",
+      classification: {
+        source: "fallback",
+        confidence: "low",
+        needsAdminReview: true,
+      },
+    });
+    return {
+      vehicleId,
+      vehicleTypeId,
+      year: 2016,
+      make: "GMC",
+      model: "Sierr 2500HD Denali",
+      source: "manual" as const,
+      confidence: "high" as const,
+      rawCategory: "Manufacturer confirms Sierra is a truck",
+      correctedModel: "Sierra 2500HD Denali",
+      confirmExistingManualCategory: true,
+    };
+  });
+  await expect(
+    t.mutation(internal.vehicleReconciliation.applyBatch, {
+      records: [record],
+    }),
+  ).rejects.toThrow("evidence is required");
+  const evidenceUrls = ["https://www.gmc.com/trucks/sierra/1500"];
+  const args = { records: [{ ...record, evidenceUrls }] };
+  expect(
+    (await t.mutation(internal.vehicleReconciliation.applyBatch, args)).updated,
+  ).toEqual([record.vehicleId]);
+  expect(await t.run((ctx) => ctx.db.get(record.vehicleId))).toMatchObject({
+    model: "Sierra 2500HD Denali",
+    vehicleTypeOverrideAt: 123,
+    vehicleTypeId: record.vehicleTypeId,
+    size: "large",
+    classification: { source: "manual", needsAdminReview: false },
+  });
+  const audit = await t.run((ctx) =>
+    ctx.db.query("vehicleCategoryReconciliations").take(5),
+  );
+  expect(audit).toHaveLength(1);
+  expect(audit[0]).toMatchObject({
+    before: { make: "GMC", model: "Sierr 2500HD Denali", size: "medium" },
+    evidenceUrls,
+  });
+  expect(
+    (await t.mutation(internal.vehicleReconciliation.applyBatch, args)).updated,
+  ).toEqual([]);
+});

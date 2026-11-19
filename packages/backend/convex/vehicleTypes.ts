@@ -1,3 +1,4 @@
+import { getManufacturerCategoryEvidence } from "./lib/vehicleManufacturerEvidence";
 import {
   resolveTrimSearch,
   trimModelFamily,
@@ -859,6 +860,15 @@ export const classify = action({
     const lookup = normalizeVehicleInput(args.make, args.model, args.year);
     let canonicalMake = lookup.make;
     let modelCandidates: string[] = [lookup.model];
+    let providerModelConfirmed = false;
+    const manufacturer = getManufacturerCategoryEvidence(
+      args.year,
+      args.make,
+      args.model,
+    );
+    const manufacturerDescription = manufacturer
+      ? `Manufacturer evidence: ${manufacturer.make} ${manufacturer.model} is ${manufacturer.slug}; ${manufacturer.url}`
+      : undefined;
     try {
       const makes = toMenuItems(
         await fetchJson(
@@ -876,6 +886,7 @@ export const classify = action({
       const matches = models.filter((m) =>
         vehicleModelsMatch(lookup.model, m.text),
       );
+      providerModelConfirmed = matches.length > 0;
       // Consider every plausible variant, even if one model name is exact.
       // A base name can span body styles with different pricing categories.
       modelCandidates = matches.length
@@ -940,8 +951,16 @@ export const classify = action({
       // Incomplete provider evidence must not turn into a pricing decision.
     }
 
+    if (manufacturer && providerModelConfirmed) {
+      mapped = { slug: manufacturer.slug, confidence: "high" };
+      source = "fallback";
+      rawCategory = manufacturerDescription;
+      conflictingCategories = false;
+    }
+
     if (
       !conflictingCategories &&
+      !(manufacturer && providerModelConfirmed) &&
       (source === "fallback" || mapped.confidence === "low")
     ) {
       try {
@@ -951,8 +970,17 @@ export const classify = action({
         const match = (vpic?.Results ?? []).find((result: any) =>
           vehicleModelsMatch(lookup.model, String(result.Model_Name ?? "")),
         );
-        rawCategory = match?.VehicleTypeName ?? rawCategory;
-        if (match && !match.VehicleTypeName) {
+        if (match && manufacturer) {
+          mapped = { slug: manufacturer.slug, confidence: "high" };
+          source = "fallback";
+          rawCategory = manufacturerDescription;
+          providerModelConfirmed = true;
+        } else rawCategory = match?.VehicleTypeName ?? rawCategory;
+        if (
+          match &&
+          !match.VehicleTypeName &&
+          !(manufacturer && providerModelConfirmed)
+        ) {
           const typed = await Promise.all(
             ["truck", "passenger car", "motorcycle"].map(async (type) => {
               const result = await fetchJson(
@@ -980,7 +1008,10 @@ export const classify = action({
             rawCategory = classes[0];
         }
         const vpicMapped = mapCategoryToSlug(rawCategory);
-        if (vpicMapped.confidence !== "low") {
+        if (
+          vpicMapped.confidence !== "low" &&
+          !(manufacturer && providerModelConfirmed)
+        ) {
           mapped = vpicMapped;
           source = "vpic";
         }

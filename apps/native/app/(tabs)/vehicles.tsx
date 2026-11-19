@@ -40,6 +40,13 @@ export default function VehiclesScreen() {
       return;
     }
 
+    if (!newVehicle.vehicleTypeId) {
+      Alert.alert(
+        "Choose a category",
+        "Select your vehicle category for accurate pricing.",
+      );
+      return;
+    }
     setIsSaving(true);
     try {
       await createVehicle({

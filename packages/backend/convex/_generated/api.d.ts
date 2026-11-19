@@ -41,6 +41,7 @@ import type * as lib_subscriptionDates from "../lib/subscriptionDates.js";
 import type * as lib_subscriptionPricing from "../lib/subscriptionPricing.js";
 import type * as lib_time from "../lib/time.js";
 import type * as lib_travelFees from "../lib/travelFees.js";
+import type * as lib_vehicleManufacturerEvidence from "../lib/vehicleManufacturerEvidence.js";
 import type * as lib_vehicleMatching from "../lib/vehicleMatching.js";
 import type * as lib_vehicleSearch from "../lib/vehicleSearch.js";
 import type * as lib_vehicleTrims from "../lib/vehicleTrims.js";
@@ -109,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   "lib/subscriptionPricing": typeof lib_subscriptionPricing;
   "lib/time": typeof lib_time;
   "lib/travelFees": typeof lib_travelFees;
+  "lib/vehicleManufacturerEvidence": typeof lib_vehicleManufacturerEvidence;
   "lib/vehicleMatching": typeof lib_vehicleMatching;
   "lib/vehicleSearch": typeof lib_vehicleSearch;
   "lib/vehicleTrims": typeof lib_vehicleTrims;

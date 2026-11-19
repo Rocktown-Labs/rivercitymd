@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { vehicleModelsMatch, normalizeVehicleMake } from "./vehicleMatching";
+import {
+  vehicleModelsMatch,
+  normalizeVehicleMake,
+  normalizeVehicleInput,
+} from "./vehicleMatching";
 
 test("spacing and punctuation do not change a model, but partial words and trim-only names remain unresolved", () => {
   expect(vehicleModelsMatch("crv", "CR-V AWD")).toBe(true);
@@ -17,4 +21,27 @@ test("model-family boundaries survive capacity numbers and trim prefixes", () =>
   expect(vehicleModelsMatch("F150", "F1500")).toBe(false);
   expect(vehicleModelsMatch("Sport", "Bronco Sport")).toBe(false);
   expect(vehicleModelsMatch("4run", "4Runner")).toBe(false);
+});
+
+test("researched input aliases retain explicit model/trim identity without inferring bare GMC trims", () => {
+  expect(normalizeVehicleInput("Hobda", "Accord", 2009)).toEqual({
+    make: "Honda",
+    model: "Accord",
+  });
+  expect(normalizeVehicleInput("Nissisn", "Armda", 2021)).toEqual({
+    make: "Nissan",
+    model: "Armada",
+  });
+  expect(normalizeVehicleInput("f150", "STX", 2014)).toEqual({
+    make: "Ford",
+    model: "F-150 STX",
+  });
+  expect(normalizeVehicleInput("challenger", "rt", 2012)).toEqual({
+    make: "Dodge",
+    model: "Challenger R/T",
+  });
+  expect(normalizeVehicleInput("GMC", "Denali", 2022)).toEqual({
+    make: "GMC",
+    model: "Denali",
+  });
 });

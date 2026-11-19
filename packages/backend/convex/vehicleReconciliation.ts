@@ -8,7 +8,15 @@ const evidence = v.object({
   model: v.string(),
   vehicleTypeId: v.id("vehicleTypes"),
   confidence: v.literal("high"),
-  source: v.union(v.literal("fuelEconomy"), v.literal("vpic")),
+  source: v.union(
+    v.literal("fuelEconomy"),
+    v.literal("vpic"),
+    v.literal("manual"),
+  ),
+  evidenceUrls: v.optional(v.array(v.string())),
+  correctedMake: v.optional(v.string()),
+  correctedModel: v.optional(v.string()),
+  confirmExistingManualCategory: v.optional(v.boolean()),
   rawCategory: v.string(),
 });
 
@@ -29,6 +37,40 @@ export const applyBatch = internalMutation({
     const updated = [];
     const skipped = [];
     for (const record of records) {
+      const hasWebEvidence =
+        record.source === "manual" && Boolean(record.evidenceUrls?.length);
+      if (
+        (record.source === "manual" ||
+          record.correctedMake ||
+          record.correctedModel ||
+          record.confirmExistingManualCategory) &&
+        !hasWebEvidence
+      ) {
+        throw new Error("Reviewed manufacturer evidence is required");
+      }
+      if (
+        (record.evidenceUrls?.length ?? 0) > 5 ||
+        record.evidenceUrls?.some((url) => {
+          try {
+            const parsed = new URL(url);
+            return (
+              parsed.protocol !== "https:" ||
+              Boolean(parsed.username || parsed.password) ||
+              url.length > 1000
+            );
+          } catch {
+            return true;
+          }
+        })
+      )
+        throw new Error("Provide at most five HTTPS evidence URLs");
+      if (
+        [record.correctedMake, record.correctedModel].some(
+          (value) =>
+            value !== undefined && (!value.trim() || value.length > 200),
+        )
+      )
+        throw new Error("Invalid corrected vehicle identity");
       const vehicle = await ctx.db.get(record.vehicleId);
       const type = await ctx.db.get(record.vehicleTypeId);
       let reason: string | undefined;
@@ -40,9 +82,14 @@ export const applyBatch = internalMutation({
       )
         reason = "Vehicle changed since audit";
       else if (
-        vehicle.vehicleTypeOverrideBy ||
-        vehicle.vehicleTypeOverrideAt ||
-        vehicle.classification?.source === "manual"
+        (vehicle.vehicleTypeOverrideBy ||
+          vehicle.vehicleTypeOverrideAt ||
+          vehicle.classification?.source === "manual") &&
+        !(
+          hasWebEvidence &&
+          record.confirmExistingManualCategory &&
+          vehicle.vehicleTypeId === record.vehicleTypeId
+        )
       )
         reason = "Manual selection preserved";
       else if (
@@ -52,7 +99,9 @@ export const applyBatch = internalMutation({
         reason = "Existing category requires confirmation";
       else if (
         vehicle.vehicleTypeId &&
-        !vehicle.classification?.needsAdminReview
+        !vehicle.classification?.needsAdminReview &&
+        (!record.correctedMake || record.correctedMake === vehicle.make) &&
+        (!record.correctedModel || record.correctedModel === vehicle.model)
       )
         reason = "Already resolved";
       if (reason || !vehicle || !type) {
@@ -68,6 +117,9 @@ export const applyBatch = internalMutation({
         action: "assigned",
         reconciledAt: Date.now(),
         before: {
+          year: vehicle.year,
+          make: vehicle.make,
+          model: vehicle.model,
           vehicleTypeId: vehicle.vehicleTypeId,
           size: vehicle.size,
           classification: vehicle.classification,
@@ -75,8 +127,13 @@ export const applyBatch = internalMutation({
         vehicleTypeId: type._id,
         source: record.source,
         rawCategory: record.rawCategory,
+        evidenceUrls: record.evidenceUrls,
       });
       await ctx.db.patch(vehicle._id, {
+        ...(record.correctedMake ? { make: record.correctedMake.trim() } : {}),
+        ...(record.correctedModel
+          ? { model: record.correctedModel.trim() }
+          : {}),
         vehicleTypeId: type._id,
         size: type.legacySize,
         classification: {

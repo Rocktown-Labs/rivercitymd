@@ -549,15 +549,15 @@ test("conflicting body categories require review instead of choosing the first t
       const u = String(url);
       if (u.includes("/menu/make"))
         return Response.json({
-          menuItem: { text: "Chevrolet", value: "Chevrolet" },
+          menuItem: { text: "Ford", value: "Ford" },
         });
       if (u.includes("/menu/model"))
         return Response.json({
           menuItem: [
-            { text: "Colorado 2WD", value: "Colorado 2WD" },
+            { text: "Transit 2WD", value: "Transit 2WD" },
             {
-              text: "Colorado Cab Chassis 2WD",
-              value: "Colorado Cab Chassis 2WD",
+              text: "Transit Cab Chassis 2WD",
+              value: "Transit Cab Chassis 2WD",
             },
           ],
         });
@@ -568,14 +568,14 @@ test("conflicting body categories require review instead of choosing the first t
       return Response.json({
         VClass: u.endsWith("/2")
           ? "Special Purpose Vehicle 2WD"
-          : "Small Pickup Trucks 2WD",
+          : "Van",
       });
     }),
   );
   const result = await t.action(api.vehicleTypes.classify, {
     year: 2016,
-    make: "Chevy",
-    model: "Colorado",
+    make: "Ford",
+    model: "Transit",
   });
   expect(result.vehicleTypeId).toBeUndefined();
   expect(result.needsAdminReview).toBe(true);
@@ -791,4 +791,46 @@ test("a matching commercial vPIC model outranks broad passenger-model recovery c
     query: "2025 Ford F250",
   });
   expect(results.map((r) => r.model)).toEqual(["F-250"]);
+});
+
+test("manufacturer evidence resolves a GLB SUV despite differing EPA wagon/SUV classes", async () => {
+  const t = convexTest(schema, modules);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("/menu/make"))
+        return Response.json({
+          menuItem: { text: "Mercedes-Benz", value: "Mercedes-Benz" },
+        });
+      if (u.includes("/menu/model"))
+        return Response.json({
+          menuItem: [
+            { text: "GLB250", value: "GLB250" },
+            { text: "GLB250 4matic", value: "GLB250 4matic" },
+          ],
+        });
+      if (u.includes("/menu/options"))
+        return Response.json({
+          menuItem: { value: u.includes("4matic") ? "2" : "1" },
+        });
+      return Response.json({
+        VClass: u.endsWith("/2")
+          ? "Small Sport Utility Vehicle 4WD"
+          : "Small Station Wagons",
+      });
+    }),
+  );
+  const result = await t.action(api.vehicleTypes.classify, {
+    year: 2021,
+    make: "Mercedes",
+    model: "GLB 250",
+  });
+  expect(result).toMatchObject({
+    vehicleTypeName: "SUV",
+    source: "fallback",
+    confidence: "high",
+    needsAdminReview: false,
+  });
+  expect(result.rawCategory).toContain("Manufacturer evidence:");
 });

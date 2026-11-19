@@ -119,8 +119,10 @@ const schema = defineSchema({
   }).index("by_user", ["userId"]),
 
   vehicleCategoryReconciliations: defineTable({
+    evidenceUrls: v.optional(v.array(v.string())),
     vehicleId: v.id("vehicles"), issue: v.number(), reconciledAt: v.number(),
     before: v.object({
+      year: v.optional(v.number()), make: v.optional(v.string()), model: v.optional(v.string()),
       vehicleTypeId: v.optional(v.id("vehicleTypes")),
       size: v.optional(v.union(v.literal("small"),v.literal("medium"),v.literal("large"))),
       classification: v.optional(v.object({
